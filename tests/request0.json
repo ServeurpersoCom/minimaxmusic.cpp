@@ -1,0 +1,9 @@
+{
+    "caption": "An upbeat synthwave track with punchy drums and analog bass",
+    "lyrics": "[start]\n[verse]\nNeon lights across the bay\nWe drive until the break of day",
+    "duration": 8,
+    "steps": 30,
+    "dit_cfg": 1.7,
+    "lm_cfg": 1.5,
+    "lm_top_k": 50
+}

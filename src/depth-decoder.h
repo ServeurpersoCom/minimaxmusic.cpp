@@ -39,7 +39,6 @@
 #include "ggml.h"
 #include "gguf-weights.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -304,7 +303,7 @@ inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, 
     const int DIM = DepthDecoder::DIM;
     const int V   = DepthDecoder::VOCAB;
     const int NC  = DepthDecoder::CODEBOOKS - 1;
-    const int k   = std::min(std::max(top_k, 1), V);
+    const int k   = top_k < 1 ? 1 : (top_k > V ? V : top_k);
 
     size_t ctx_size = ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(4096, false);
     slot.buf        = (uint8_t *) malloc(ctx_size);

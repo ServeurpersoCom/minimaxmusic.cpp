@@ -20,7 +20,6 @@
 #include "vae.h"
 #include "version.h"
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -177,9 +176,9 @@ int main(int argc, char ** argv) {
     int n_tiles = (T_latent + chunk_size - 1) / chunk_size;
     fprintf(stderr, "[VAE] Decoding %d frames, %d tile(s)...\n", T_latent, n_tiles);
     for (int start = 0; start < T_latent; start += chunk_size) {
-        int end = std::min(start + chunk_size, T_latent);
-        int lo  = std::max(start - overlap, 0);
-        int hi  = std::min(end + overlap, T_latent);
+        int end = start + chunk_size < T_latent ? start + chunk_size : T_latent;
+        int lo  = start - overlap > 0 ? start - overlap : 0;
+        int hi  = end + overlap < T_latent ? end + overlap : T_latent;
         int T_t = hi - lo;
 
         // frame-major file slice -> channel-major [128, T_t] for decode

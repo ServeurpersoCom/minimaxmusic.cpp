@@ -41,7 +41,7 @@ static int mm3_cfg_sample(const float *            cond,
     for (int id : allowed) {
         ranked.push_back({ cond[id], id });
     }
-    int k = (int) std::min((size_t) top_k, ranked.size());
+    int k = (size_t) top_k < ranked.size() ? top_k : (int) ranked.size();
     std::partial_sort(
         ranked.begin(), ranked.begin() + k, ranked.end(),
         [](const std::pair<float, int> & a, const std::pair<float, int> & b) { return a.first > b.first; });
@@ -52,7 +52,7 @@ static int mm3_cfg_sample(const float *            cond,
     for (int i = 0; i < k; i++) {
         int id    = ranked[i].second;
         guided[i] = uncond[id] + (cond[id] - uncond[id]) * cfg;
-        mx        = std::max(mx, guided[i]);
+        mx        = guided[i] > mx ? guided[i] : mx;
     }
     float sum = 0;
     for (int i = 0; i < k; i++) {
@@ -214,8 +214,11 @@ PipelineStatus pipeline_generate(MM3Pipeline *        p,
 
     // Frame budget: requested duration, the model cap, and the KV room
     // left after the prompt (one decode per frame).
-    int max_frames = std::min((int) (req.duration * FRAME_RATE), MAX_FRAMES);
-    int kv_budget  = p->lm.cfg.max_seq_len - (int) cond_ids.size() - 1;
+    int max_frames = (int) (req.duration * FRAME_RATE);
+    if (max_frames > MAX_FRAMES) {
+        max_frames = MAX_FRAMES;
+    }
+    int kv_budget = p->lm.cfg.max_seq_len - (int) cond_ids.size() - 1;
     if (max_frames > kv_budget) {
         fprintf(stderr, "[AR] Frame budget clamped to %d by the KV cache (prompt %zu tokens)\n", kv_budget,
                 cond_ids.size());
@@ -363,7 +366,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *        p,
     for (size_t k = 0; k < chunk_starts.size(); k++) {
         Timer window_timer;
         int   start = chunk_starts[k];
-        int   end   = std::min(start + CHUNK_FRAMES, n_frames);
+        int   end   = start + CHUNK_FRAMES < n_frames ? start + CHUNK_FRAMES : n_frames;
 
         std::vector<float> window(frame_hiddens.begin() + (size_t) start * 8 * H,
                                   frame_hiddens.begin() + (size_t) end * 8 * H);
@@ -373,7 +376,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *        p,
 
         int overlap = 0;
         if (!prev_latent.empty()) {
-            overlap = std::min((int) (prev_latent.size() / 128), T_lat);
+            overlap = (int) (prev_latent.size() / 128) < T_lat ? (int) (prev_latent.size() / 128) : T_lat;
             std::copy(prev_condition.begin(), prev_condition.begin() + (size_t) overlap * 2048, cond_track.begin());
         }
 
@@ -437,8 +440,8 @@ PipelineStatus pipeline_generate(MM3Pipeline *        p,
             xt[j] = prev_latent[j];
         }
 
-        int os = std::max(0, T_lat - 2 * OVERLAP_LATENT);
-        int oe = std::max(os, T_lat - OVERLAP_LATENT);
+        int os = T_lat - 2 * OVERLAP_LATENT > 0 ? T_lat - 2 * OVERLAP_LATENT : 0;
+        int oe = T_lat - OVERLAP_LATENT > os ? T_lat - OVERLAP_LATENT : os;
         prev_latent.assign(xt.begin() + (size_t) os * 128, xt.begin() + (size_t) oe * 128);
         prev_condition.assign(cond_track.begin() + (size_t) os * 2048, cond_track.begin() + (size_t) oe * 2048);
 

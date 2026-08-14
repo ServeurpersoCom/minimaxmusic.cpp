@@ -33,6 +33,10 @@
 #include <cstring>
 #include <vector>
 
+#ifndef M_PI
+#    define M_PI 3.14159265358979323846
+#endif
+
 struct DiTBlock {
     struct ggml_tensor *norm1_w, *norm1_b;
     struct ggml_tensor *wq, *wk, *wv, *wo;

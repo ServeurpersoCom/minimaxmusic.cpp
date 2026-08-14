@@ -61,8 +61,9 @@ cmake .. -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKE
 cmake --build . --config Release -j %NUMBER_OF_PROCESSORS%
 ```
 
-Builds three binaries: `mm-synth` (full pipeline CLI), `mm-server` (HTTP
-server with embedded WebUI) and `quantize` (GGUF requantizer).
+Builds five binaries: `mm-synth` (full pipeline CLI), `mm-server` (HTTP
+server with embedded WebUI), `neural-codec` (flow VAE latent decoder),
+`mp3-codec` (MP3 encoder/decoder) and `quantize` (GGUF requantizer).
 
 A single `build/` directory serves every backend combination. With
 `buildall`, the backend is picked at runtime: the `GGML_BACKEND`
@@ -589,6 +590,79 @@ Each job has a cancel flag polled by the pipeline between AR frames,
 between DiT steps and between VAE windows, and passed down to the MP3
 encoder. Shutdown (SIGINT/SIGTERM) cancels the active job through the same
 flag: Ctrl+C lands in about 100 ms even mid-generation.
+
+## neural-codec reference
+
+GGML-native decoder for the flow VAE latent space. The published MiniMax
+Music 3 checkpoint ships a decoder only (`vocoder/`), so this codec has no
+encode mode: it plays back latent files without rerunning the pipeline.
+
+```
+Usage: ./neural-codec --vae <gguf> --decode -i <input> [-o <output>] [options]
+
+Required:
+  --vae <path>            VAE GGUF file
+  --decode                Decode latent to audio
+  -i <path>               Input latent (.vae)
+
+Output:
+  -o <path>               Output file (auto-named if omitted)
+  --format <fmt>          mp3, wav16, wav24, wav32 (default: wav16)
+
+Output naming: song.vae -> song.wav
+
+Memory control:
+  --vae-chunk <N>         Latent frames per tile (default: 689)
+  --vae-overlap <N>       Overlap frames per side (default: 86)
+
+Latent format:
+  .vae: flat [T, 128] f32, no header. 86.13 Hz, ~353 kbit/s.
+```
+
+The `.vae` file is the raw latent, frame-major, one 128 channel f32 frame
+per latent step (512 bytes, x512 audio samples). The pipeline `--dump`
+latents carry the same payload behind a 12 byte debug header (i32 ndims +
+shape); stripping the header yields a valid `.vae`.
+
+Output is never normalized: the codec reproduces the decoder output
+exactly. A single-tile decode is bit-identical to the audio the pipeline
+emits for the same latent window. Long latents are decoded in tiles with
+symmetric overlap cropped on both sides; the overlap (86 latents = 44032
+samples) sits far beyond the decoder's receptive field, so tiling only
+introduces backend-level GEMM epsilon (max abs error ~4e-4 measured
+against a single-tile decode on CUDA).
+
+```bash
+# decode a dumped window latent
+./neural-codec --vae models/MiniMax-Music3-vocoder-F32.gguf --decode -i song.vae -o song.wav
+
+# raw float output, no 16 bit quantization
+./neural-codec --vae models/MiniMax-Music3-vocoder-F32.gguf --decode -i song.vae --format wav32
+```
+
+## mp3-codec reference
+
+Standalone MIT-licensed MPEG1 Layer III encoder and decoder. No external
+dependencies, no GGML. The encoder is the one `mm-synth` and `mm-server`
+use for MP3 output; the decoder uses minimp3 (CC0). Reads WAV or MP3,
+writes WAV or MP3 (auto-detected from the output extension).
+
+```
+Usage: ./mp3-codec -i <input> -o <output> [options]
+
+  -i <path>     Input file (WAV or MP3)
+  -o <path>     Output file (WAV or MP3)
+  -b <kbps>     Bitrate for MP3 encoding (default: 128)
+  --format <fmt>  WAV format: wav16, wav24, wav32 (default: wav16)
+
+Mode is auto-detected from output extension.
+
+Examples:
+  ./mp3-codec -i song.wav -o song.mp3
+  ./mp3-codec -i song.wav -o song.mp3 -b 192
+  ./mp3-codec -i song.mp3 -o song.wav
+  ./mp3-codec -i song.mp3 -o song.wav --format wav32
+```
 
 ## Accuracy
 

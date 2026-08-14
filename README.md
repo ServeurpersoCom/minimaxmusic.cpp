@@ -143,7 +143,8 @@ For scripting without the server, `mm-synth` runs the full pipeline:
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full JSON
-reference and the `quantize` tool.
+reference and the `neural-codec` (flow VAE latent playback), `mp3-codec`
+and `quantize` tools.
 
 </details>
 

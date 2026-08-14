@@ -4,7 +4,7 @@
 	import { RotateCcw, Download, FolderOpen, X } from '@lucide/svelte';
 	import { app, toast, setRequest } from '../lib/state.svelte.js';
 	import { example } from '../lib/example.js';
-	import { synthSubmit, pollJob, jobResultBlob, cancelJob } from '../lib/api.js';
+	import { synthSubmit, pollJob, jobResultBlobs, cancelJob } from '../lib/api.js';
 	import { putSong, getAllSongs, saveJob, loadJob, clearJob } from '../lib/db.js';
 	import { num, buildSparse, clearSection } from '../lib/fields.js';
 	import type { MM3Request, Song } from '../lib/types.js';
@@ -22,20 +22,24 @@
 	// shared tail of both the onMount resume and the generate path.
 	async function landJob(job: PendingJob) {
 		await pollJob(job.id);
-		const audio = await jobResultBlob(job.id);
+		const audios = await jobResultBlobs(job.id);
 		clearJob();
 		const r = job.request;
-		const song: Song = {
-			name: job.name,
-			format: app.format,
-			created: Date.now(),
-			caption: r.caption || '',
-			seed: r.seed ?? 0,
-			duration: r.duration ?? 0,
-			request: r,
-			audio
-		};
-		song.id = await putSong(song);
+		// batch jobs land one card per track in song-major order
+		const now = Date.now();
+		for (let i = 0; i < audios.length; i++) {
+			const song: Song = {
+				name: audios.length > 1 ? `${job.name} ${i}` : job.name,
+				format: app.format,
+				created: now + i,
+				caption: r.caption || '',
+				seed: r.seed ?? 0,
+				duration: r.duration ?? 0,
+				request: r,
+				audio: audios[i]
+			};
+			song.id = await putSong(song);
+		}
 		app.songs = (await getAllSongs()).reverse();
 	}
 
@@ -340,6 +344,13 @@
 					/></label
 				>
 				<label
+					>Batch <input
+						type="text"
+						placeholder={ph(d?.lm_batch_size)}
+						bind:value={app.request.lm_batch_size}
+					/></label
+				>
+				<label
 					>Seed <input
 						type="text"
 						placeholder={ph(d?.lm_seed)}
@@ -375,6 +386,13 @@
 						type="text"
 						placeholder={ph(d?.dit_cfg)}
 						bind:value={app.request.dit_cfg}
+					/></label
+				>
+				<label
+					>Variations <input
+						type="text"
+						placeholder={ph(d?.synth_batch_size)}
+						bind:value={app.request.synth_batch_size}
 					/></label
 				>
 				<label

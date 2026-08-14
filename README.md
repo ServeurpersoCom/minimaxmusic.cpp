@@ -90,11 +90,12 @@ Required:
 Server:
   --host <addr>          Listen address (default: 127.0.0.1)
   --port <N>             Listen port (default: 8086)
+  --max-batch <N>        LM batch limit (default: 1)
   --max-seq <N>          LM KV cache size (default: model context)
 
 Debug:
   --no-fa                Disable flash attention
-  --no-batch-cfg         Split CFG into two separate forwards
+  --no-batch-cfg         Split CFG into two separate forwards (LM + DiT)
   --clamp-fp16           Clamp hidden states to FP16 range
   --dump <dir>           Dump intermediate tensors
 ```

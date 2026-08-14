@@ -9,6 +9,8 @@ export interface MM3Request {
 	lm_seed?: number;
 	lm_cfg?: number;
 	lm_top_k?: number;
+	lm_batch_size?: number;
+	synth_batch_size?: number;
 	dit_cfg?: number;
 	peak_clip?: number;
 	output_format?: string;

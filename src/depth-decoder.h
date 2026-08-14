@@ -90,18 +90,21 @@ struct DepthDecoder {
         struct ggml_tensor *  logits  = nullptr;
     };
 
-    // One cached fused frame graph, keyed on the baked sampling params.
+    // One cached fused frame graph, keyed on the baked sampling params
+    // and the song count. Batch dim 2 in song blocks: [cond 0..N-1,
+    // uncond N..2N-1].
     struct FusedSlot {
-        struct ggml_context * ctx                  = nullptr;
-        uint8_t *             buf                  = nullptr;
-        ggml_backend_sched_t  sched                = nullptr;
-        struct ggml_cgraph *  graph                = nullptr;
-        struct ggml_tensor *  seq_init             = nullptr;  // [4096, 2, 2]
-        struct ggml_tensor *  rand                 = nullptr;  // [7]
-        struct ggml_tensor *  cond_hiddens         = nullptr;  // [4096, 7]
-        struct ggml_tensor *  codes[CODEBOOKS - 1] = {};
-        float                 cfg                  = 0.0f;
-        int                   top_k                = 0;
+        struct ggml_context * ctx          = nullptr;
+        uint8_t *             buf          = nullptr;
+        ggml_backend_sched_t  sched        = nullptr;
+        struct ggml_cgraph *  graph        = nullptr;
+        struct ggml_tensor *  seq_init     = nullptr;  // [4096, 2, 2N]
+        struct ggml_tensor *  rand         = nullptr;  // [7N] song-major
+        struct ggml_tensor *  cond_hiddens = nullptr;  // [4096, 7N] song-major
+        struct ggml_tensor *  codes        = nullptr;  // [1, 7N] F32 song-major
+        float                 cfg          = 0.0f;
+        int                   top_k        = 0;
+        int                   n_songs      = 0;
     };
 
     GraphSlot slots[MAX_SEQ + 1];  // single sequence graphs
@@ -120,11 +123,12 @@ struct DepthDecoder {
     // acoustic codebook. Samples the 7 codes in graph and writes them to
     // codes7, plus the 7 conditional last-step hidden states [7, 4096]
     // time-major to cond_hiddens.
-    bool forward_frame(const float * seq2,
-                       const float * rand7,
+    bool forward_frame(const float * seq_init,
+                       const float * rand,
                        float         cfg,
                        int           top_k,
-                       int *         codes7,
+                       int           n_songs,
+                       int *         codes,
                        float *       cond_hiddens);
 
     // Row of the audio embedding table for acoustic codebook cb (1..7)
@@ -299,13 +303,13 @@ inline bool depth_build_slot(DepthDecoder * m, DepthDecoder::GraphSlot & slot, i
 // uniform draw (clamped: the draw can land past the CDF tail), gather of
 // the vocab id, then the code's device embedding row appended to both
 // streams for the next step.
-inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, float cfg, int top_k) {
+inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, float cfg, int top_k, int N) {
     const int DIM = DepthDecoder::DIM;
     const int V   = DepthDecoder::VOCAB;
     const int NC  = DepthDecoder::CODEBOOKS - 1;
     const int k   = top_k < 1 ? 1 : (top_k > V ? V : top_k);
 
-    size_t ctx_size = ggml_tensor_overhead() * 4096 + ggml_graph_overhead_custom(4096, false);
+    size_t ctx_size = ggml_tensor_overhead() * 8192 + ggml_graph_overhead_custom(8192, false);
     slot.buf        = (uint8_t *) malloc(ctx_size);
     if (!slot.buf) {
         fprintf(stderr, "[Depth] FATAL: OOM allocating fused graph context\n");
@@ -314,9 +318,9 @@ inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, 
     struct ggml_init_params p   = { ctx_size, slot.buf, true };
     struct ggml_context *   ctx = ggml_init(p);
 
-    slot.seq_init = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, DIM, 2, 2);
+    slot.seq_init = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, DIM, 2, 2 * N);
     ggml_set_input(slot.seq_init);
-    slot.rand = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, NC);
+    slot.rand = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, (int64_t) NC * N);
     ggml_set_input(slot.rand);
 
     // Scalar gather over a row vector: values reshaped to one column per row
@@ -325,56 +329,74 @@ inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, 
         return ggml_reshape_1d(ctx, ggml_get_rows(ctx, cols, idx), idx->ne[0]);
     };
 
-    struct ggml_tensor * seq = slot.seq_init;
-    struct ggml_tensor * hid_parts[DepthDecoder::CODEBOOKS - 1];
+    struct ggml_tensor *              seq = slot.seq_init;
+    std::vector<struct ggml_tensor *> hid_parts((size_t) N * NC);
+    std::vector<struct ggml_tensor *> code_parts((size_t) N * NC);
 
     for (int cb = 1; cb <= NC; cb++) {
         int       S   = cb + 1;
-        DepthStep out = depth_model(ctx, m, seq, S, 2);
+        DepthStep out = depth_model(ctx, m, seq, S, 2 * N);
 
-        hid_parts[cb - 1] =
-            ggml_reshape_2d(ctx, ggml_view_1d(ctx, out.hiddens, DIM, (size_t) (S - 1) * out.hiddens->nb[1]), DIM, 1);
+        std::vector<struct ggml_tensor *> rows(N);
+        for (int i = 0; i < N; i++) {
+            hid_parts[(size_t) i * NC + cb - 1] = ggml_reshape_2d(
+                ctx, ggml_view_1d(ctx, out.hiddens, DIM, (size_t) (i * S + S - 1) * out.hiddens->nb[1]), DIM, 1);
 
-        struct ggml_tensor * cond   = ggml_view_1d(ctx, out.logits, V, 0);
-        struct ggml_tensor * uncond = ggml_view_1d(ctx, out.logits, V, out.logits->nb[1]);
+            struct ggml_tensor * cond   = ggml_view_1d(ctx, out.logits, V, (size_t) i * out.logits->nb[1]);
+            struct ggml_tensor * uncond = ggml_view_1d(ctx, out.logits, V, (size_t) (N + i) * out.logits->nb[1]);
 
-        struct ggml_tensor * idxk     = ggml_cont(ctx, ggml_argsort_top_k(ctx, cond, k));
-        struct ggml_tensor * cond_k   = gather(cond, idxk);
-        struct ggml_tensor * uncond_k = gather(uncond, idxk);
-        struct ggml_tensor * guided   = ggml_add(ctx, uncond_k, ggml_scale(ctx, ggml_sub(ctx, cond_k, uncond_k), cfg));
+            struct ggml_tensor * idxk     = ggml_cont(ctx, ggml_argsort_top_k(ctx, cond, k));
+            struct ggml_tensor * cond_k   = gather(cond, idxk);
+            struct ggml_tensor * uncond_k = gather(uncond, idxk);
+            struct ggml_tensor * guided =
+                ggml_add(ctx, uncond_k, ggml_scale(ctx, ggml_sub(ctx, cond_k, uncond_k), cfg));
 
-        struct ggml_tensor * cdf = ggml_cumsum(ctx, ggml_soft_max(ctx, guided));
-        struct ggml_tensor * u   = ggml_view_1d(ctx, slot.rand, 1, (size_t) (cb - 1) * sizeof(float));
-        struct ggml_tensor * idxf =
-            ggml_scale_bias(ctx, ggml_sum(ctx, ggml_step(ctx, ggml_sub(ctx, cdf, u))), -1.0f, (float) k);
-        struct ggml_tensor * pick = ggml_cast(ctx, ggml_clamp(ctx, idxf, 0.0f, (float) (k - 1)), GGML_TYPE_I32);
+            struct ggml_tensor * cdf = ggml_cumsum(ctx, ggml_soft_max(ctx, guided));
+            struct ggml_tensor * u   = ggml_view_1d(ctx, slot.rand, 1, (size_t) (i * NC + cb - 1) * sizeof(float));
+            struct ggml_tensor * idxf =
+                ggml_scale_bias(ctx, ggml_sum(ctx, ggml_step(ctx, ggml_sub(ctx, cdf, u))), -1.0f, (float) k);
+            struct ggml_tensor * pick = ggml_cast(ctx, ggml_clamp(ctx, idxf, 0.0f, (float) (k - 1)), GGML_TYPE_I32);
 
-        struct ggml_tensor * code = ggml_get_rows(ctx, ggml_reshape_2d(ctx, idxk, 1, k), pick);
-        slot.codes[cb - 1]        = code;
-        ggml_set_output(code);
+            struct ggml_tensor * idxk2 = ggml_reshape_2d(ctx, idxk, 1, k);
+            struct ggml_tensor * code  = ggml_get_rows(ctx, idxk2, pick);
+            code_parts[(size_t) i * NC + cb - 1] =
+                ggml_get_rows(ctx, ggml_reshape_2d(ctx, ggml_cast(ctx, idxk, GGML_TYPE_F32), 1, k), pick);
+
+            if (cb < NC) {
+                struct ggml_tensor * table = ggml_view_2d(ctx, m->audio_embeddings, DIM, V, m->audio_embeddings->nb[1],
+                                                          (size_t) (cb - 1) * V * m->audio_embeddings->nb[1]);
+                struct ggml_tensor * row   = ggml_get_rows(ctx, table, ggml_reshape_1d(ctx, code, 1));
+                rows[i]                    = ggml_reshape_3d(ctx, row, DIM, 1, 1);
+            }
+        }
 
         if (cb < NC) {
-            struct ggml_tensor * table = ggml_view_2d(ctx, m->audio_embeddings, DIM, V, m->audio_embeddings->nb[1],
-                                                      (size_t) (cb - 1) * V * m->audio_embeddings->nb[1]);
-            struct ggml_tensor * row   = ggml_get_rows(ctx, table, ggml_reshape_1d(ctx, code, 1));
-            struct ggml_tensor * row3  = ggml_reshape_3d(ctx, row, DIM, 1, 1);
-            seq                        = ggml_concat(ctx, seq, ggml_concat(ctx, row3, row3, 2), 1);
+            struct ggml_tensor * rows_cond = rows[0];
+            for (int i = 1; i < N; i++) {
+                rows_cond = ggml_concat(ctx, rows_cond, rows[i], 2);
+            }
+            struct ggml_tensor * new_col = ggml_concat(ctx, rows_cond, rows_cond, 2);
+            seq                          = ggml_concat(ctx, seq, new_col, 1);
         }
     }
 
     slot.cond_hiddens = hid_parts[0];
-    for (int i = 1; i < NC; i++) {
+    for (size_t i = 1; i < hid_parts.size(); i++) {
         slot.cond_hiddens = ggml_concat(ctx, slot.cond_hiddens, hid_parts[i], 1);
     }
     ggml_set_output(slot.cond_hiddens);
 
-    slot.graph = ggml_new_graph_custom(ctx, 4096, false);
-    ggml_build_forward_expand(slot.graph, slot.cond_hiddens);
-    for (int i = 0; i < NC; i++) {
-        ggml_build_forward_expand(slot.graph, slot.codes[i]);
+    slot.codes = code_parts[0];
+    for (size_t i = 1; i < code_parts.size(); i++) {
+        slot.codes = ggml_concat(ctx, slot.codes, code_parts[i], 1);
     }
+    ggml_set_output(slot.codes);
 
-    slot.sched = backend_sched_new(m->bp, 4096);
+    slot.graph = ggml_new_graph_custom(ctx, 8192, false);
+    ggml_build_forward_expand(slot.graph, slot.cond_hiddens);
+    ggml_build_forward_expand(slot.graph, slot.codes);
+
+    slot.sched = backend_sched_new(m->bp, 8192);
     if (!ggml_backend_sched_alloc_graph(slot.sched, slot.graph)) {
         fprintf(stderr, "[Depth] FATAL: fused graph alloc failed\n");
         ggml_backend_sched_free(slot.sched);
@@ -383,9 +405,10 @@ inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, 
         slot = {};
         return false;
     }
-    slot.ctx   = ctx;
-    slot.cfg   = cfg;
-    slot.top_k = top_k;
+    slot.ctx     = ctx;
+    slot.cfg     = cfg;
+    slot.top_k   = top_k;
+    slot.n_songs = N;
     return true;
 }
 
@@ -408,33 +431,36 @@ inline bool DepthDecoder::forward(const float * seq, int S, float * hiddens, flo
     return true;
 }
 
-inline bool DepthDecoder::forward_frame(const float * seq2,
-                                        const float * rand7,
+inline bool DepthDecoder::forward_frame(const float * seq_init,
+                                        const float * rand,
                                         float         cfg,
                                         int           top_k,
-                                        int *         codes7,
+                                        int           n_songs,
+                                        int *         codes,
                                         float *       cond_hiddens) {
-    // The graph bakes the sampling params: rebuild when they change
-    if (fused.ctx && (fused.cfg != cfg || fused.top_k != top_k)) {
+    // The graph bakes the sampling params and the song count: rebuild
+    // when any of them changes
+    if (fused.ctx && (fused.cfg != cfg || fused.top_k != top_k || fused.n_songs != n_songs)) {
         ggml_backend_sched_free(fused.sched);
         ggml_free(fused.ctx);
         std::free(fused.buf);
         fused = {};
     }
-    if (!fused.ctx && !depth_build_fused(this, fused, cfg, top_k)) {
+    if (!fused.ctx && !depth_build_fused(this, fused, cfg, top_k, n_songs)) {
         return false;
     }
 
-    ggml_backend_tensor_set(fused.seq_init, seq2, 0, (size_t) 2 * 2 * DIM * sizeof(float));
-    ggml_backend_tensor_set(fused.rand, rand7, 0, (CODEBOOKS - 1) * sizeof(float));
+    const int NC = CODEBOOKS - 1;
+    ggml_backend_tensor_set(fused.seq_init, seq_init, 0, (size_t) 2 * n_songs * 2 * DIM * sizeof(float));
+    ggml_backend_tensor_set(fused.rand, rand, 0, (size_t) NC * n_songs * sizeof(float));
     ggml_backend_sched_graph_compute(fused.sched, fused.graph);
 
-    for (int i = 0; i < CODEBOOKS - 1; i++) {
-        int32_t code = 0;
-        ggml_backend_tensor_get(fused.codes[i], &code, 0, sizeof(int32_t));
-        codes7[i] = code;
+    std::vector<float> codes_f((size_t) NC * n_songs);
+    ggml_backend_tensor_get(fused.codes, codes_f.data(), 0, codes_f.size() * sizeof(float));
+    for (size_t i = 0; i < codes_f.size(); i++) {
+        codes[i] = (int) lroundf(codes_f[i]);
     }
-    ggml_backend_tensor_get(fused.cond_hiddens, cond_hiddens, 0, (size_t) (CODEBOOKS - 1) * DIM * sizeof(float));
+    ggml_backend_tensor_get(fused.cond_hiddens, cond_hiddens, 0, (size_t) NC * n_songs * DIM * sizeof(float));
     return true;
 }
 

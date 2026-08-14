@@ -22,6 +22,16 @@ struct MM3Request {
     int64_t lm_seed;   // -1 = random. AR sampling mt19937 consumes the low
                        // 32 bits. Same int64_t storage trick as seed.
 
+    // batching: number of songs generated from this prompt. Each song
+    // samples with its own stream (lm_seed + index), acestep convention
+    // of consecutive internal seeds.
+    int lm_batch_size;  // 1
+
+    // number of flow matching variations per song, consecutive noise
+    // seeds (seed + index) on the same condition track. Output order is
+    // song-major: song * synth_batch_size + variation.
+    int synth_batch_size;  // 1
+
     // guidance
     float lm_cfg;    // 1.5, CFG scale on LM and depth decoder logits
     int   lm_top_k;  // 50, applied to the conditional branch ranking

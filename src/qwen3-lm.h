@@ -274,6 +274,15 @@ static void qw3lm_reset_kv(Qwen3LM * m, int kv_set) {
     // over the padded attention tail.
 }
 
+// Copy KV cache from one set to another (for batched prefill sharing)
+static void qw3lm_copy_kv(Qwen3LM * m, int src, int dst) {
+    for (int l = 0; l < m->cfg.n_layers; l++) {
+        ggml_backend_tensor_copy(m->kv_k[src][l], m->kv_k[dst][l]);
+        ggml_backend_tensor_copy(m->kv_v[src][l], m->kv_v[dst][l]);
+    }
+    m->kv_pos[dst] = m->kv_pos[src];
+}
+
 // Load model weights from GGUF
 static bool qw3lm_load(Qwen3LM * m, const char * gguf_path, int max_seq_len, int n_kv_sets) {
     *m = {};

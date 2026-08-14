@@ -220,6 +220,29 @@ static void resolve_paths(const MM3Request & r, MM3ModelPaths & paths) {
     paths.vae               = resolve_model(g_registry.vae, r.vae_model, l.vae);
 }
 
+// Build a multipart/mixed body with one audio part per generated track.
+// The boundary is fixed; the client splits on it.
+static const char * MULTIPART_BOUNDARY = "mm3-batch-boundary";
+
+static std::string multipart_build_audio(const std::vector<std::string> & audio_parts, const char * audio_mime) {
+    std::string body;
+    for (size_t i = 0; i < audio_parts.size(); i++) {
+        body += "--";
+        body += MULTIPART_BOUNDARY;
+        body += "\r\nContent-Type: ";
+        body += audio_mime;
+        body += "\r\n\r\n";
+        body += audio_parts[i];
+        body += "\r\n";
+    }
+    body += "--";
+    body += MULTIPART_BOUNDARY;
+    body += "--\r\n";
+    return body;
+}
+
+static const std::string MULTIPART_MIME = std::string("multipart/mixed; boundary=") + MULTIPART_BOUNDARY;
+
 // job system: the compute endpoint creates a job and returns its ID
 // immediately. the worker thread processes jobs in FIFO order, stores
 // the result. the client polls GET /job?id=N until done, then fetches
@@ -488,6 +511,14 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         json_error(res, 400, "steps must be at least 2");
         return;
     }
+    if (r.lm_batch_size < 1 || r.lm_batch_size > g_params.max_batch) {
+        json_error(res, 400, "lm_batch_size exceeds --max-batch");
+        return;
+    }
+    if (r.synth_batch_size < 1 || r.synth_batch_size > 9) {
+        json_error(res, 400, "synth_batch_size must be between 1 and 9");
+        return;
+    }
 
     // Output format from MM3Request.output_format. Converts the string to
     // (output_wav, wav_fmt) using the same parser the CLI uses.
@@ -520,8 +551,8 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         }
         fprintf(stderr, "[Server] Job %s: %s\n", job->id.c_str(), request_to_json(&r).c_str());
 
-        std::vector<float> audio;
-        PipelineStatus     status = pipeline_generate(&g_pipeline, r, &job->cancel, audio);
+        std::vector<std::vector<float>> tracks;
+        PipelineStatus                  status = pipeline_generate(&g_pipeline, r, &job->cancel, tracks);
         if (status == PIPELINE_CANCELLED) {
             job->status.store(JobStatus::CANCELLED);
             return;
@@ -532,21 +563,30 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         }
 
         // encode (peak normalize + encode), WAV_F32 preserves full range
-        int T_audio = (int) (audio.size() / 2);
-        if (!output_wav || wav_fmt != WAV_F32) {
-            audio_normalize(audio.data(), T_audio * 2, r.peak_clip);
+        const char *             mime = output_wav ? "audio/wav" : "audio/mpeg";
+        std::vector<std::string> parts(tracks.size());
+        for (size_t i = 0; i < tracks.size(); i++) {
+            std::vector<float> & audio   = tracks[i];
+            int                  T_audio = (int) (audio.size() / 2);
+            if (!output_wav || wav_fmt != WAV_F32) {
+                audio_normalize(audio.data(), T_audio * 2, r.peak_clip);
+            }
+            parts[i] = output_wav ? audio_encode_wav(audio.data(), T_audio, 44100, wav_fmt) :
+                                    audio_encode_mp3(audio.data(), T_audio, 44100, r.mp3_bitrate, server_cancel_job,
+                                                     (void *) &job->cancel);
+            if (job->cancel.load()) {
+                job->status.store(JobStatus::CANCELLED);
+                return;
+            }
         }
-        if (output_wav) {
-            job->result_body = audio_encode_wav(audio.data(), T_audio, 44100, wav_fmt);
-            job->result_mime = "audio/wav";
+        if (parts.size() == 1) {
+            // Single track responds with the raw audio body
+            job->result_body = std::move(parts[0]);
+            job->result_mime = mime;
         } else {
-            job->result_body =
-                audio_encode_mp3(audio.data(), T_audio, 44100, r.mp3_bitrate, server_cancel_job, (void *) &job->cancel);
-            job->result_mime = "audio/mpeg";
-        }
-        if (job->cancel.load()) {
-            job->status.store(JobStatus::CANCELLED);
-            return;
+            // Batches respond multipart/mixed, one audio part per track
+            job->result_body = multipart_build_audio(parts, mime);
+            job->result_mime = MULTIPART_MIME;
         }
         job->status.store(JobStatus::DONE);
     });
@@ -605,10 +645,11 @@ static void print_usage(const char * argv0) {
             "Server:\n"
             "  --host <addr>          Listen address (default: 127.0.0.1)\n"
             "  --port <N>             Listen port (default: 8086)\n"
+            "  --max-batch <N>        LM batch limit (default: 1)\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
             "Debug:\n"
             "  --no-fa                Disable flash attention\n"
-            "  --no-batch-cfg         Split CFG into two separate forwards\n"
+            "  --no-batch-cfg         Split CFG into two separate forwards (LM + DiT)\n"
             "  --clamp-fp16           Clamp hidden states to FP16 range\n"
             "  --dump <dir>           Dump intermediate tensors\n",
             argv0);
@@ -625,6 +666,11 @@ int main(int argc, char ** argv) {
             port = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--models") == 0 && i + 1 < argc) {
             g_models_dir = argv[++i];
+        } else if (strcmp(argv[i], "--max-batch") == 0 && i + 1 < argc) {
+            g_params.max_batch = atoi(argv[++i]);
+            if (g_params.max_batch < 1) {
+                g_params.max_batch = 1;
+            }
         } else if (strcmp(argv[i], "--max-seq") == 0 && i + 1 < argc) {
             g_params.max_seq = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--no-fa") == 0) {

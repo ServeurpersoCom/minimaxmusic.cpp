@@ -34,6 +34,7 @@ struct MM3PipelineParams {
     bool         use_batch_cfg = true;     // fuse the cond and uncond CFG streams in one LM decode
     bool         clamp_fp16    = false;    // clamp hidden states to FP16 range
     int          max_seq       = 0;        // LM KV cache size, 0 = model context
+    int          max_batch     = 1;        // song batch limit, sizes the 2N LM KV sets at load
     const char * dump_dir      = nullptr;  // dump intermediate tensors
 };
 
@@ -72,10 +73,11 @@ bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3Pipe
 
 // Full text to audio generation. Seeds must be resolved by the caller
 // (request_resolve_seed / request_resolve_lm_seed).
-// audio_out: planar stereo float [L:T][R:T] at 44100 Hz, full range
-// (normalization and clipping belong to the output encoding stage).
+// tracks_out: lm_batch_size tracks, each planar stereo float [L:T][R:T]
+// at 44100 Hz, full range (normalization and clipping belong to the
+// output encoding stage). Song i samples with lm_seed + i.
 // cancel: optional, polled at stage boundaries. NULL disables cancellation.
-PipelineStatus pipeline_generate(MM3Pipeline *        p,
-                                 const MM3Request &   req,
-                                 std::atomic<bool> *  cancel,
-                                 std::vector<float> & audio_out);
+PipelineStatus pipeline_generate(MM3Pipeline *                     p,
+                                 const MM3Request &                req,
+                                 std::atomic<bool> *               cancel,
+                                 std::vector<std::vector<float>> & tracks_out);

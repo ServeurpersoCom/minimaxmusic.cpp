@@ -34,7 +34,7 @@ static void print_usage(const char * argv0) {
             "Debug:\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
             "  --no-fa                Disable flash attention\n"
-            "  --no-batch-cfg         Split CFG into two separate forwards\n"
+            "  --no-batch-cfg         Split CFG into two separate forwards (LM + DiT)\n"
             "  --clamp-fp16           Clamp hidden states to FP16 range\n"
             "  --dump <dir>           Dump intermediate tensors\n",
             argv0, argv0);
@@ -137,6 +137,7 @@ int main(int argc, char ** argv) {
     }
     request_resolve_seed(&req);
     request_resolve_lm_seed(&req);
+    params.max_batch = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
 
     ModelRegistry reg;
     registry_scan(&reg, models.c_str());
@@ -163,21 +164,33 @@ int main(int argc, char ** argv) {
         output_wav = !is_mp3;
     }
 
-    std::vector<float> audio;
-    if (pipeline_generate(&pipeline, req, nullptr, audio) != PIPELINE_OK) {
+    std::vector<std::vector<float>> tracks;
+    if (pipeline_generate(&pipeline, req, nullptr, tracks) != PIPELINE_OK) {
         return 1;
     }
 
-    // encode (peak normalize + encode), WAV_F32 preserves full range
-    int T_audio = (int) (audio.size() / 2);
-    if (!output_wav || wav_fmt != WAV_F32) {
-        audio_normalize(audio.data(), T_audio * 2, req.peak_clip);
+    // encode (peak normalize + encode), WAV_F32 preserves full range.
+    // A single track lands on --out as given; a batch numbers the base
+    // with song then variation index: song.mp3 -> song00.mp3 ...
+    int M = (int) tracks.size() / (req.lm_batch_size < 1 ? 1 : req.lm_batch_size);
+    for (size_t i = 0; i < tracks.size(); i++) {
+        std::string path = out_path;
+        if (tracks.size() > 1) {
+            std::string idx = std::to_string(i / M) + std::to_string(i % M);
+            size_t      dot = out_path.rfind('.');
+            path = dot != std::string::npos ? out_path.substr(0, dot) + idx + out_path.substr(dot) : out_path + idx;
+        }
+        std::vector<float> & audio   = tracks[i];
+        int                  T_audio = (int) (audio.size() / 2);
+        if (!output_wav || wav_fmt != WAV_F32) {
+            audio_normalize(audio.data(), T_audio * 2, req.peak_clip);
+        }
+        bool ok = output_wav ? audio_write_wav(path.c_str(), audio.data(), T_audio, 44100, wav_fmt) :
+                               audio_write_mp3(path.c_str(), audio.data(), T_audio, 44100, req.mp3_bitrate);
+        if (!ok) {
+            return 1;
+        }
+        fprintf(stderr, "[Out] %s\n", path.c_str());
     }
-    bool ok = output_wav ? audio_write_wav(out_path.c_str(), audio.data(), T_audio, 44100, wav_fmt) :
-                           audio_write_mp3(out_path.c_str(), audio.data(), T_audio, 44100, req.mp3_bitrate);
-    if (!ok) {
-        return 1;
-    }
-    fprintf(stderr, "[Out] %s\n", out_path.c_str());
     return 0;
 }

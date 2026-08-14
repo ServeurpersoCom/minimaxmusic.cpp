@@ -38,7 +38,7 @@ int main(int argc, char ** argv) {
     }
 
     std::vector<float> vel((size_t) T * 128);
-    if (!dit.forward(xt.data(), cond.data(), T, t, vel.data())) {
+    if (!dit.forward(xt.data(), cond.data(), T, 1, t, vel.data())) {
         return 1;
     }
 

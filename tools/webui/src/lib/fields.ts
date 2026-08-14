@@ -25,11 +25,13 @@ export const FIELDS: readonly FieldDef[] = [
 	// lm: autoregressive sampling settings
 	{ key: 'lm_cfg', section: 'lm', type: 'num' },
 	{ key: 'lm_top_k', section: 'lm', type: 'num' },
+	{ key: 'lm_batch_size', section: 'lm', type: 'num' },
 	{ key: 'lm_seed', section: 'lm', type: 'num' },
 
 	// flow: flow matching settings
 	{ key: 'steps', section: 'flow', type: 'num' },
 	{ key: 'dit_cfg', section: 'flow', type: 'num' },
+	{ key: 'synth_batch_size', section: 'flow', type: 'num' },
 	{ key: 'seed', section: 'flow', type: 'num' },
 
 	// post: output encoding settings

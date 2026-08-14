@@ -380,6 +380,8 @@ required: the server rejects requests missing either.
     "lm_seed":       -1,
     "lm_cfg":        1.5,
     "lm_top_k":      50,
+    "lm_batch_size": 1,
+    "synth_batch_size": 1,
     "dit_cfg":       1.7,
     "peak_clip":     10,
     "output_format": "mp3",
@@ -428,6 +430,18 @@ CFG scale applied on LM and depth decoder logits.
 
 **`lm_top_k`** (int, default `50`)
 Top-K restriction, ranked on the conditional branch before guidance.
+
+**`lm_batch_size`** (int, default `1`)
+Number of songs generated from the prompt in one batched autoregressive
+pass. Song i samples with its own stream seeded `lm_seed + i`
+(consecutive internal seeds), so a song is bit-identical whether
+generated alone or in a batch. Limited by the server's `--max-batch`.
+
+**`synth_batch_size`** (int, default `1`)
+Number of flow matching variations per song, batched in the DiT on the
+shared condition track with consecutive noise seeds (`seed + j`).
+Between 1 and 9. The job returns `lm_batch_size * synth_batch_size`
+tracks in song-major order.
 
 **`dit_cfg`** (float, default `1.7`)
 CFG scale on the DiT velocity field.
@@ -511,14 +525,19 @@ Required:
 Server:
   --host <addr>          Listen address (default: 127.0.0.1)
   --port <N>             Listen port (default: 8086)
+  --max-batch <N>        LM batch limit (default: 1)
   --max-seq <N>          LM KV cache size (default: model context)
 
 Debug:
   --no-fa                Disable flash attention
-  --no-batch-cfg         Split CFG into two separate forwards
+  --no-batch-cfg         Split CFG into two separate forwards (LM + DiT)
   --clamp-fp16           Clamp hidden states to FP16 range
   --dump <dir>           Dump intermediate tensors
 ```
+
+`--max-batch` sizes the LM KV cache at load time (2N sets of about
+1.5 GB each) and bounds `lm_batch_size`; requests above the limit get
+a 400.
 
 The debug flags are global to the process and applied to the components as
 they load (the graph caches bake them in), so they are boot options, not
@@ -540,7 +559,9 @@ GET  /job?id=N                  Poll job status
   response: {"status":"queued|running|done|failed|cancelled"}
 
 GET  /job?id=N&result=1         Fetch job result
-  audio/mpeg or audio/wav body (output_format of the request)
+  audio/mpeg or audio/wav body (output_format of the request); batch
+  jobs (more than one track) respond multipart/mixed with one audio
+  part per track, boundary mm3-batch-boundary, song-major order
   404 while the result is not ready
 
 POST /job?id=N&cancel=1         Cancel a specific job

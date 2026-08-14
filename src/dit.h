@@ -85,13 +85,16 @@ struct DiT {
     struct ggml_tensor *  in_pos       = nullptr;
     struct ggml_tensor *  graph_output = nullptr;
     int                   graph_T      = 0;
+    int                   graph_B      = 0;
 
     bool load(const char * gguf_path);
 
-    // One denoising evaluation: xt [T, 128] time-major, cond [T, 2048]
-    // time-major (zeros for the unconditional CFG branch), t in [0, 1]
-    // (0 = noise, 1 = data). Writes the velocity [T, 128] time-major.
-    bool forward(const float * xt, const float * cond, int T, float t, float * velocity);
+    // One denoising evaluation for a batch of B sequences sharing the
+    // schedule step. xt: B contiguous [T, 128] time-major blocks, cond:
+    // B contiguous [T, 2048] time-major blocks (zeros for unconditional
+    // CFG branches), t in [0, 1] (0 = noise, 1 = data). Writes B
+    // contiguous velocity [T, 128] time-major blocks.
+    bool forward(const float * xt, const float * cond, int T, int B, float t, float * velocity);
 
     // Dump the named probe tensors of the last computed graph (cossim harness)
     void dump_named(const DebugDumper * dbg);
@@ -180,9 +183,10 @@ static struct ggml_tensor * dit_attn_f32(struct ggml_context * ctx,
 static struct ggml_tensor * dit_block(struct ggml_context * ctx,
                                       DiT *                 m,
                                       DiTBlock *            b,
-                                      struct ggml_tensor *  x,  // [2048, S]
+                                      struct ggml_tensor *  x,  // [2048, S, B]
                                       struct ggml_tensor *  pos,
                                       int                   S,
+                                      int                   B,
                                       const char *          sa_name) {
     const int D  = DiT::HEAD_DIM;
     const int Nh = DiT::N_HEADS;
@@ -194,9 +198,9 @@ static struct ggml_tensor * dit_block(struct ggml_context * ctx,
     struct ggml_tensor * k = ggml_mul_mat(ctx, b->wk, h);
     struct ggml_tensor * v = ggml_mul_mat(ctx, b->wv, h);
 
-    q = ggml_reshape_3d(ctx, q, D, Nh, S);
-    k = ggml_reshape_3d(ctx, k, D, Nh, S);
-    v = ggml_reshape_3d(ctx, v, D, Nh, S);
+    q = ggml_reshape_4d(ctx, q, D, Nh, S, B);
+    k = ggml_reshape_4d(ctx, k, D, Nh, S, B);
+    v = ggml_reshape_4d(ctx, v, D, Nh, S, B);
 
     // Partial NeoX RoPE: only the first 32 dims of each head rotate
     q = ggml_rope_ext(ctx, q, pos, NULL, DiT::ROTARY_DIM, GGML_ROPE_TYPE_NEOX, 0, 10000.0f, 1.0f, 0.0f, 1.0f, 0.0f,
@@ -219,7 +223,7 @@ static struct ggml_tensor * dit_block(struct ggml_context * ctx,
     } else {
         attn = dit_attn_f32(ctx, q, k, v, scale);
     }
-    attn = ggml_reshape_2d(ctx, attn, Nh * D, S);
+    attn = ggml_reshape_3d(ctx, attn, Nh * D, S, B);
 
     struct ggml_tensor * sa_out = ggml_mul_mat(ctx, b->wo, attn);
     if (sa_name) {
@@ -232,9 +236,9 @@ static struct ggml_tensor * dit_block(struct ggml_context * ctx,
     h                          = dit_layer_norm(ctx, x, b->norm2_w, b->norm2_b);
     struct ggml_tensor * ff    = ggml_mul_mat(ctx, b->ff_in_w, h);
     ff                         = ggml_add(ctx, ff, b->ff_in_b);
-    struct ggml_tensor * value = ggml_cont(ctx, ggml_view_2d(ctx, ff, DiT::FF_INNER, S, ff->nb[1], 0));
-    struct ggml_tensor * gate =
-        ggml_cont(ctx, ggml_view_2d(ctx, ff, DiT::FF_INNER, S, ff->nb[1], (size_t) DiT::FF_INNER * ff->nb[0]));
+    struct ggml_tensor * value = ggml_cont(ctx, ggml_view_3d(ctx, ff, DiT::FF_INNER, S, B, ff->nb[1], ff->nb[2], 0));
+    struct ggml_tensor * gate  = ggml_cont(
+        ctx, ggml_view_3d(ctx, ff, DiT::FF_INNER, S, B, ff->nb[1], ff->nb[2], (size_t) DiT::FF_INNER * ff->nb[0]));
     struct ggml_tensor * act = ggml_swiglu_split(ctx, gate, value);
     struct ggml_tensor * out = ggml_mul_mat(ctx, b->ff_out_w, act);
     out                      = ggml_add(ctx, out, b->ff_out_b);
@@ -242,7 +246,7 @@ static struct ggml_tensor * dit_block(struct ggml_context * ctx,
     return ggml_add(ctx, x, out);
 }
 
-static struct ggml_tensor * dit_build_graph(struct ggml_context * ctx, DiT * m, int T) {
+static struct ggml_tensor * dit_build_graph(struct ggml_context * ctx, DiT * m, int T, int B) {
     int S = T + 1;
 
     // Channel concat [latent, zeros, condition] -> [2304, T]
@@ -262,7 +266,7 @@ static struct ggml_tensor * dit_build_graph(struct ggml_context * ctx, DiT * m, 
     x = ggml_concat(ctx, m->in_temb, x, 1);
 
     for (int i = 0; i < DiT::N_LAYERS; i++) {
-        x = dit_block(ctx, m, &m->blocks[i], x, m->in_pos, S, i == 0 ? "layer0_sa_output" : NULL);
+        x = dit_block(ctx, m, &m->blocks[i], x, m->in_pos, S, B, i == 0 ? "layer0_sa_output" : NULL);
         if (m->clamp_fp16) {
             x = ggml_clamp(ctx, x, -65504.0f, 65504.0f);
         }
@@ -276,10 +280,10 @@ static struct ggml_tensor * dit_build_graph(struct ggml_context * ctx, DiT * m, 
     }
 
     // Drop the timestep token, project back to latent channels
-    struct ggml_tensor * tokens = ggml_view_2d(ctx, x, DiT::DIM, T, x->nb[1], x->nb[1]);
+    struct ggml_tensor * tokens = ggml_view_3d(ctx, x, DiT::DIM, T, B, x->nb[1], x->nb[2], x->nb[1]);
     struct ggml_tensor * y      = ggml_mul_mat(ctx, m->out_w, ggml_cont(ctx, tokens));
     y                           = ggml_add(ctx, ggml_mul_mat(ctx, m->post_w, y), y);
-    return y;  // [128, T]
+    return y;  // [128, T, B]
 }
 
 // CPU timestep embedding: Fourier features -> linear -> SiLU -> linear
@@ -308,8 +312,8 @@ static void dit_time_embed(DiT * m, float t, std::vector<float> & temb) {
     }
 }
 
-inline bool DiT::forward(const float * xt, const float * cond, int T, float t, float * velocity) {
-    if (graph_T != T) {
+inline bool DiT::forward(const float * xt, const float * cond, int T, int B, float t, float * velocity) {
+    if (graph_T != T || graph_B != B) {
         if (graph_ctx) {
             ggml_backend_sched_reset(sched);
             ggml_free(graph_ctx);
@@ -326,9 +330,9 @@ inline bool DiT::forward(const float * xt, const float * cond, int T, float t, f
         struct ggml_init_params p   = { ctx_size, graph_buf, true };
         struct ggml_context *   ctx = ggml_init(p);
 
-        in_xt   = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, IN_CH, T);
-        in_cond = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, COND_DIM, T);
-        in_temb = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, DIM, 1);
+        in_xt   = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, IN_CH, T, B);
+        in_cond = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, COND_DIM, T, B);
+        in_temb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, DIM, 1, B);
         ggml_set_name(in_temb, "temb_t");
         in_pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, T + 1);
         ggml_set_input(in_xt);
@@ -336,7 +340,7 @@ inline bool DiT::forward(const float * xt, const float * cond, int T, float t, f
         ggml_set_input(in_temb);
         ggml_set_input(in_pos);
 
-        graph_output = dit_build_graph(ctx, this, T);
+        graph_output = dit_build_graph(ctx, this, T, B);
         ggml_set_name(graph_output, "dit_output");
         ggml_set_output(graph_output);
 
@@ -344,36 +348,43 @@ inline bool DiT::forward(const float * xt, const float * cond, int T, float t, f
         ggml_build_forward_expand(graph, graph_output);
 
         if (!ggml_backend_sched_alloc_graph(sched, graph)) {
-            fprintf(stderr, "[DiT] FATAL: graph alloc failed for T=%d\n", T);
+            fprintf(stderr, "[DiT] FATAL: graph alloc failed for T=%d B=%d\n", T, B);
             ggml_free(ctx);
             std::free(graph_buf);
             graph_ctx = NULL;
             graph_buf = NULL;
             graph_T   = 0;
+            graph_B   = 0;
             return false;
         }
 
         graph_ctx = ctx;
         graph_T   = T;
-        fprintf(stderr, "[DiT] Graph: %d nodes, T=%d\n", ggml_graph_n_nodes(graph), T);
+        graph_B   = B;
+        fprintf(stderr, "[DiT] Graph: %d nodes, T=%d, B=%d\n", ggml_graph_n_nodes(graph), T, B);
     }
 
-    std::vector<float> temb;
-    dit_time_embed(this, t, temb);
+    // The schedule step is shared: one embedding replicated per element
+    std::vector<float> temb1;
+    dit_time_embed(this, t, temb1);
+    std::vector<float> temb((size_t) DIM * B);
+    for (int b = 0; b < B; b++) {
+        memcpy(temb.data() + (size_t) b * DIM, temb1.data(), DIM * sizeof(float));
+    }
 
     std::vector<int32_t> pos(T + 1);
     for (int i = 0; i <= T; i++) {
         pos[i] = i;
     }
 
-    ggml_backend_tensor_set(in_xt, xt, 0, (size_t) IN_CH * T * sizeof(float));
-    ggml_backend_tensor_set(in_cond, cond, 0, (size_t) COND_DIM * T * sizeof(float));
-    ggml_backend_tensor_set(in_temb, temb.data(), 0, DIM * sizeof(float));
+    ggml_backend_tensor_set(in_xt, xt, 0, (size_t) IN_CH * T * B * sizeof(float));
+    ggml_backend_tensor_set(in_cond, cond, 0, (size_t) COND_DIM * T * B * sizeof(float));
+    ggml_backend_tensor_set(in_temb, temb.data(), 0, (size_t) DIM * B * sizeof(float));
     ggml_backend_tensor_set(in_pos, pos.data(), 0, (T + 1) * sizeof(int32_t));
 
     ggml_backend_sched_graph_compute(sched, graph);
 
-    ggml_backend_tensor_get(graph_output, velocity, 0, (size_t) IN_CH * T * sizeof(float));
+    ggml_backend_tensor_get(graph_output, velocity, 0, (size_t) IN_CH * T * B * sizeof(float));
     return true;
 }
 
@@ -384,6 +395,7 @@ inline void DiT::free() {
         graph_ctx = nullptr;
         graph_buf = nullptr;
         graph_T   = 0;
+        graph_B   = 0;
     }
     if (sched) {
         ggml_backend_sched_free(sched);

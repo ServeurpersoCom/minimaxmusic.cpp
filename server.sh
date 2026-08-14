@@ -4,6 +4,7 @@ set -eu
 
 # Multi-GPU: set GGML_BACKEND to pick a device (CUDA0, CUDA1, Vulkan0...)
 #export GGML_BACKEND=CUDA0
+#export GGML_BACKEND=Vulkan0
 
 ./build/mm-server \
     --host 0.0.0.0 \

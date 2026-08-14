@@ -205,12 +205,22 @@ PipelineStatus pipeline_generate(MM3Pipeline *        p,
 
     Timer              prefill_timer;
     std::vector<float> logits0(V), logits1(V), hidden0(H), hidden1(H);
+    qw3lm_reset_kv(&p->lm, 0);
+    qw3lm_reset_kv(&p->lm, 1);
     qw3lm_forward(&p->lm, cond_ids.data(), (int) cond_ids.size(), 0, logits0.data(), nullptr, hidden0.data());
     qw3lm_forward(&p->lm, uncond_ids.data(), (int) uncond_ids.size(), 1, logits1.data(), nullptr, hidden1.data());
     fprintf(stderr, "[AR] Prefill %.0f ms, %zu tokens, CFG=%.2f, top_k=%d\n", prefill_timer.ms(), cond_ids.size(),
             req.lm_cfg, req.lm_top_k);
 
+    // Frame budget: requested duration, the model cap, and the KV room
+    // left after the prompt (one decode per frame).
     int max_frames = std::min((int) (req.duration * FRAME_RATE), MAX_FRAMES);
+    int kv_budget  = p->lm.cfg.max_seq_len - (int) cond_ids.size() - 1;
+    if (max_frames > kv_budget) {
+        fprintf(stderr, "[AR] Frame budget clamped to %d by the KV cache (prompt %zu tokens)\n", kv_budget,
+                cond_ids.size());
+        max_frames = kv_budget;
+    }
 
     std::vector<float> frame_hiddens;  // [n_frames, 8, 4096]
     std::vector<float> seq0, seq1, depth_hid((size_t) 8 * H), depth_logits0(DepthDecoder::VOCAB),

@@ -266,6 +266,14 @@ static void qw3lm_alloc_kv_cache(Qwen3LM * m, int n_sets) {
             (float) kv_bytes / (1024 * 1024));
 }
 
+// Clear KV cache for a given set
+static void qw3lm_reset_kv(Qwen3LM * m, int kv_set) {
+    m->kv_pos[kv_set] = 0;
+    // No rezero needed: stale values past kv_pos are finite (zeroed at
+    // alloc, then overwritten by real K/V) and the mask carries neg inf
+    // over the padded attention tail.
+}
+
 // Load model weights from GGUF
 static bool qw3lm_load(Qwen3LM * m, const char * gguf_path, int max_seq_len, int n_kv_sets) {
     *m = {};

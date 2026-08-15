@@ -705,3 +705,22 @@ static bool audio_write_mp3(const char * path, const float * audio, int T_audio,
     fprintf(stderr, "[MP3] Wrote %s\n", path);
     return true;
 }
+
+// Write planar stereo audio in the requested output format.
+// Normalizes in place first, except WAV_F32 which keeps the full range.
+static bool audio_write(const char * path,
+                        float *      audio,
+                        int          T_audio,
+                        int          sr,
+                        bool         is_mp3,
+                        WavFormat    wav_fmt   = WAV_S16,
+                        int          kbps      = 128,
+                        int          peak_clip = 10) {
+    if (is_mp3 || wav_fmt != WAV_F32) {
+        audio_normalize(audio, T_audio * 2, peak_clip);
+    }
+    if (is_mp3) {
+        return audio_write_mp3(path, audio, T_audio, sr, kbps);
+    }
+    return audio_write_wav(path, audio, T_audio, sr, wav_fmt);
+}

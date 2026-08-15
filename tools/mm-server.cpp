@@ -174,22 +174,6 @@ static const int    MAX_PROMPT_TOKENS = 5000;
 static BPETokenizer g_tok;
 static bool         g_tok_ready = false;
 
-// resolve a requested model name against a registry bucket.
-// empty request = the currently loaded model, else the first entry.
-// unknown names resolve to an empty path (the caller replies 400).
-static std::string resolve_model(const std::vector<ModelEntry> & bucket,
-                                 const std::string &             requested,
-                                 const std::string &             loaded) {
-    if (!requested.empty()) {
-        const ModelEntry * e = registry_find(bucket, requested.c_str());
-        return e ? e->path : "";
-    }
-    if (!loaded.empty()) {
-        return loaded;
-    }
-    return bucket.empty() ? "" : bucket.front().path;
-}
-
 // validate the request's model names against the registry (immutable
 // after startup, safe from any thread). explicit unknown names and empty
 // buckets get a 400 before the job is queued.
@@ -221,11 +205,11 @@ static bool validate_models(const MM3Request & r) {
 // the models requested by the previous job.
 static void resolve_paths(const MM3Request & r, MM3ModelPaths & paths) {
     const MM3ModelPaths & l = g_pipeline.wanted;
-    paths.lm                = resolve_model(g_registry.lm, r.lm_model, l.lm);
-    paths.depth             = resolve_model(g_registry.depth, r.depth_model, l.depth);
-    paths.cond              = resolve_model(g_registry.cond, r.cond_model, l.cond);
-    paths.dit               = resolve_model(g_registry.dit, r.dit_model, l.dit);
-    paths.vae               = resolve_model(g_registry.vae, r.vae_model, l.vae);
+    paths.lm                = registry_resolve(g_registry.lm, r.lm_model, "lm", l.lm);
+    paths.depth             = registry_resolve(g_registry.depth, r.depth_model, "depth", l.depth);
+    paths.cond              = registry_resolve(g_registry.cond, r.cond_model, "cond", l.cond);
+    paths.dit               = registry_resolve(g_registry.dit, r.dit_model, "dit", l.dit);
+    paths.vae               = registry_resolve(g_registry.vae, r.vae_model, "vae", l.vae);
 }
 
 // Build a multipart/mixed body with one JSON replay request part
@@ -640,7 +624,8 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         int                      M = (int) (tracks.size() / codes.size());
         std::vector<std::string> requests(parts.size());
         for (size_t i = 0; i < parts.size(); i++) {
-            requests[i] = request_replay_json(r, codes[i / M], (int) (i / M), (int) (i % M));
+            MM3Request replay = request_replay(r, codes[i / M], (int) (i / M), (int) (i % M));
+            requests[i]       = request_to_json(&replay, true);
         }
         job->result_body = multipart_build_tracks(requests, parts, mime);
         job->result_mime = MULTIPART_MIME;

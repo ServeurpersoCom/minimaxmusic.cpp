@@ -71,7 +71,7 @@ void pipeline_configure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3P
 // output encoding stage). Song i samples with lm_seed + i.
 // cancel: optional, polled at stage boundaries. NULL disables cancellation.
 // codes_out: optional, the audio_codes stream of each song, identical
-// to the input codes under replay. Feeds request_replay_json.
+// to the input codes under replay. Feeds request_replay.
 PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  const MM3Request &                req,
                                  std::atomic<bool> *               cancel,

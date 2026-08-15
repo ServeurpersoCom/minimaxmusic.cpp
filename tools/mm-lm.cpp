@@ -15,7 +15,6 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <string>
 #include <vector>
 
@@ -47,30 +46,7 @@ static void print_usage(const char * prog) {
             prog, prog);
 }
 
-static std::string read_file(const char * path) {
-    FILE * f = fopen(path, "rb");
-    if (!f) {
-        fprintf(stderr, "[LM] FATAL: cannot open %s\n", path);
-        return "";
-    }
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    if (size <= 0) {
-        fclose(f);
-        fprintf(stderr, "[LM] FATAL: empty file %s\n", path);
-        return "";
-    }
-    std::string data((size_t) size, '\0');
-    size_t      rd = fread(&data[0], 1, (size_t) size, f);
-    fclose(f);
-    if (rd != (size_t) size) {
-        fprintf(stderr, "[LM] FATAL: short read on %s\n", path);
-        return "";
-    }
-    return data;
-}
-
+// write the prompt token dump
 static bool write_file(const char * path, const std::string & data) {
     FILE * f = fopen(path, "wb");
     if (!f) {
@@ -80,24 +56,6 @@ static bool write_file(const char * path, const std::string & data) {
     size_t wr = fwrite(data.data(), 1, data.size(), f);
     fclose(f);
     return wr == data.size();
-}
-
-static std::string resolve_model(const std::vector<ModelEntry> & bucket,
-                                 const std::string &             requested,
-                                 const char *                    component) {
-    if (bucket.empty()) {
-        fprintf(stderr, "[LM] FATAL: no %s model found in --models directory\n", component);
-        return "";
-    }
-    if (requested.empty()) {
-        return bucket.front().path;
-    }
-    const ModelEntry * e = registry_find(bucket, requested.c_str());
-    if (!e) {
-        fprintf(stderr, "[LM] FATAL: unknown %s model %s\n", component, requested.c_str());
-        return "";
-    }
-    return e->path;
 }
 
 int main(int argc, char ** argv) {
@@ -152,12 +110,8 @@ int main(int argc, char ** argv) {
         print_usage(argv[0]);
         return 1;
     }
-    if (!request_path.empty()) {
-        std::string json = read_file(request_path.c_str());
-        if (json.empty() || !request_parse_json(&req, json.c_str())) {
-            fprintf(stderr, "[LM] FATAL: invalid request JSON %s\n", request_path.c_str());
-            return 1;
-        }
+    if (!request_path.empty() && !request_parse(&req, request_path.c_str())) {
+        return 1;
     }
     if (req.caption.empty() || req.lyrics.empty()) {
         fprintf(stderr, "[LM] FATAL: caption and lyrics are required\n");
@@ -176,8 +130,8 @@ int main(int argc, char ** argv) {
         return 1;
     }
     MM3ModelPaths paths;
-    paths.lm    = resolve_model(reg.lm, req.lm_model, "lm");
-    paths.depth = resolve_model(reg.depth, req.depth_model, "depth");
+    paths.lm    = registry_resolve(reg.lm, req.lm_model, "lm");
+    paths.depth = registry_resolve(reg.depth, req.depth_model, "depth");
     if (paths.lm.empty() || paths.depth.empty()) {
         return 1;
     }
@@ -223,10 +177,10 @@ int main(int argc, char ** argv) {
             path       = dot != std::string::npos ? out_path.substr(0, dot) + std::to_string(i) + out_path.substr(dot) :
                                                     out_path + std::to_string(i);
         }
-        if (!write_file(path.c_str(), request_replay_json(req, codes[i], (int) i, 0) + "\n")) {
+        MM3Request replay = request_replay(req, codes[i], (int) i, 0);
+        if (!request_write(&replay, path.c_str())) {
             return 1;
         }
-        fprintf(stderr, "[Out] %s\n", path.c_str());
     }
     store_free(store);
     return 0;

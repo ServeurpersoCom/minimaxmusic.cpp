@@ -50,6 +50,31 @@ static const ModelEntry * registry_find(const std::vector<ModelEntry> & bucket, 
     return nullptr;
 }
 
+// resolve a requested model name against a bucket. An empty request keeps
+// the loaded path, or falls to the first entry. Unknown names and empty
+// buckets log and resolve to an empty path.
+static std::string registry_resolve(const std::vector<ModelEntry> & bucket,
+                                    const std::string &             requested,
+                                    const char *                    component,
+                                    const std::string &             loaded = "") {
+    if (!requested.empty()) {
+        const ModelEntry * e = registry_find(bucket, requested.c_str());
+        if (!e) {
+            fprintf(stderr, "[Registry] ERROR: unknown %s model %s\n", component, requested.c_str());
+            return "";
+        }
+        return e->path;
+    }
+    if (!loaded.empty()) {
+        return loaded;
+    }
+    if (bucket.empty()) {
+        fprintf(stderr, "[Registry] ERROR: no %s model found\n", component);
+        return "";
+    }
+    return bucket.front().path;
+}
+
 // classify a GGUF file by reading its header.
 // returns the mm3-* architecture string, or "" if unrecognized.
 static std::string registry_classify_gguf(const char * path) {

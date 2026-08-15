@@ -5,6 +5,7 @@
 #include "task-types.h"
 #include "yyjson.h"
 
+#include <cstdio>
 #include <random>
 #include <string>
 
@@ -126,6 +127,40 @@ bool request_parse_json(MM3Request * r, const char * json) {
     return true;
 }
 
+// read a whole file into a string, empty on failure
+static std::string read_file(const char * path) {
+    FILE * f = fopen(path, "rb");
+    if (!f) {
+        return "";
+    }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (size <= 0) {
+        fclose(f);
+        return "";
+    }
+    std::string out((size_t) size, '\0');
+    size_t      got = fread(&out[0], 1, (size_t) size, f);
+    fclose(f);
+    out.resize(got);
+    return out;
+}
+
+bool request_parse(MM3Request * r, const char * path) {
+    std::string json = read_file(path);
+    if (json.empty()) {
+        fprintf(stderr, "[Request] ERROR: cannot read %s\n", path);
+        return false;
+    }
+    if (!request_parse_json(r, json.c_str())) {
+        fprintf(stderr, "[Request] ERROR: malformed JSON in %s\n", path);
+        return false;
+    }
+    fprintf(stderr, "[Request] Parsed %s\n", path);
+    return true;
+}
+
 std::string request_to_json(const MM3Request * r, bool sparse) {
     MM3Request def;
     request_init(&def);
@@ -178,6 +213,20 @@ std::string request_to_json(const MM3Request * r, bool sparse) {
     return out;
 }
 
+bool request_write(const MM3Request * r, const char * path) {
+    FILE * f = fopen(path, "wb");
+    if (!f) {
+        fprintf(stderr, "[Request] ERROR: cannot write %s\n", path);
+        return false;
+    }
+    std::string json = request_to_json(r, true);
+    fwrite(json.data(), 1, json.size(), f);
+    fputc('\n', f);
+    fclose(f);
+    fprintf(stderr, "[Request] Wrote %s\n", path);
+    return true;
+}
+
 // hardware random value in [0, UINT32_MAX], positive in int64_t
 static int64_t random_seed() {
     std::random_device rd;
@@ -196,12 +245,12 @@ void request_resolve_lm_seed(MM3Request * r) {
     }
 }
 
-std::string request_replay_json(const MM3Request & base, const std::string & codes, int song, int variation) {
+MM3Request request_replay(const MM3Request & base, const std::string & codes, int song, int variation) {
     MM3Request r       = base;
     r.audio_codes      = codes;
     r.lm_seed          = base.lm_seed + song;
     r.seed             = base.seed + variation;
     r.lm_batch_size    = 1;
     r.synth_batch_size = 1;
-    return request_to_json(&r, true);
+    return r;
 }

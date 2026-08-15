@@ -72,10 +72,16 @@ void request_init(MM3Request * r);
 // Returns false on malformed JSON.
 bool request_parse_json(MM3Request * r, const char * json);
 
+// File wrapper: reads JSON from disk, then delegates to request_parse_json.
+bool request_parse(MM3Request * r, const char * path);
+
 // Serialize struct to JSON string.
 // sparse=true: omit fields at their default value (for cards and exports).
 // sparse=false: serialize all fields (for /props documentation).
 std::string request_to_json(const MM3Request * r, bool sparse = true);
+
+// File wrapper: writes the sparse JSON, one trailing newline.
+bool request_write(const MM3Request * r, const char * path);
 
 // Resolve seed: if negative, replace with a hardware random value.
 void request_resolve_seed(MM3Request * r);
@@ -83,9 +89,9 @@ void request_resolve_seed(MM3Request * r);
 // Resolve LM seed: if negative, replace with a hardware random value.
 void request_resolve_lm_seed(MM3Request * r);
 
-// Sparse replay request for one rendered track: the base request with
+// Replay request for one rendered track: the base request with
 // audio_codes set, the seeds offset to the ones the track consumed
 // (lm_seed by the song index, the DiT seed by the variation index), and
 // the batch sizes reset. Running it reproduces that track
 // deterministically.
-std::string request_replay_json(const MM3Request & base, const std::string & codes, int song, int variation);
+MM3Request request_replay(const MM3Request & base, const std::string & codes, int song, int variation);

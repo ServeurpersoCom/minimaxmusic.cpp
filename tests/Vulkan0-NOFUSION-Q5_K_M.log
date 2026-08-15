@@ -1,4 +1,3 @@
-minimaxmusic.cpp 432dd40 (2026-08-14)
 [Registry] MiniMax-Music3-condition_encoder-F32.gguf -> mm3-cond
 [Registry] MiniMax-Music3-language_model-BF16.gguf -> mm3-lm
 [Registry] MiniMax-Music3-language_model-Q5_K_M.gguf -> mm3-lm
@@ -12,8 +11,8 @@ minimaxmusic.cpp 432dd40 (2026-08-14)
 [Registry] MiniMax-Music3-transformer-Q6_K.gguf -> mm3-dit
 [Registry] MiniMax-Music3-transformer-Q8_0.gguf -> mm3-dit
 [Registry] MiniMax-Music3-vocoder-F32.gguf -> mm3-vae
+[Store] Created (policy=STRICT)
 [Pipeline] Flash attention disabled
-[BPE] Loaded from GGUF: 151675 vocab, 151387 merges
 ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
   Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
 load_backend: loaded CUDA backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-cuda.so
@@ -26,34 +25,41 @@ load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/
 [Qwen3] MLP: gate+up fused
 [WeightCtx] Loaded 399 tensors, 16374.2 MB into backend
 [LM-KV] Allocated 2 sets x 36 layers (4D batched), 2880.0 MB
-[Pipeline] LM: ../models/MiniMax-Music3-language_model-BF16.gguf, 2165 ms
+[Store] Load LM: 2037 ms
 [GGUF] ../models/MiniMax-Music3-rvq_depth_decoder-BF16.gguf: 47 tensors, data at offset 3456
 [Load] Depth backend: Vulkan0 (shared)
 [WeightCtx] Loaded 47 tensors, 1232.4 MB into backend
 [Depth] Loaded: 4 layers, dim 4096, 7 heads
-[Pipeline] Depth: ../models/MiniMax-Music3-rvq_depth_decoder-BF16.gguf, 166 ms
+[Store] Load Depth: 158 ms
+[BPE] Loaded from GGUF: 151675 vocab, 151387 merges
+[Prompt] 40 tokens
+[AR] Prefill 133 ms, 40 tokens, CFG=1.50, top_k=50, songs=1
+[AR] Frame 0/200
+[AR] Frame 100/200
+[AR] Song 0: 200 frames (8.0s of music)
+[Debug] frame_hiddens: [200, 8, 4096] first4: 0.921867 1.897966 -0.904081 -0.699011
+[AR] 200 frames total, 29.7 s (148.6 ms/frame)
+[Store] Unload Depth (1232.4 MB)
+[Store] Unload LM (16374.2 MB)
 [GGUF] ../models/MiniMax-Music3-condition_encoder-F32.gguf: 4 tensors, data at offset 640
-[Load] Cond backend: Vulkan0 (shared)
+load_backend: loaded CUDA backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-cuda.so
+load_backend: loaded Vulkan backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-vulkan.so
+load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-cpu-zen4.so
+[Load] Cond backend: Vulkan0 (CPU threads: 16)
 [Cond] Loaded: mix over 8 states, proj 4096 -> 2048
-[Pipeline] Cond: ../models/MiniMax-Music3-condition_encoder-F32.gguf, 50 ms
+[Store] Load Cond: 49 ms
 [GGUF] ../models/MiniMax-Music3-transformer-Q5_K_M.gguf: 441 tensors, data at offset 31712
 [Load] DiT backend: Vulkan0 (shared)
 [WeightCtx] Loaded 436 tensors, 1611.2 MB into backend
 [DiT] Loaded: 36 layers, dim 2048, flash_attn=1
-[Pipeline] DiT: ../models/MiniMax-Music3-transformer-Q5_K_M.gguf, 199 ms
-[GGUF] ../models/MiniMax-Music3-vocoder-F32.gguf: 91 tensors, data at offset 6240
+[Store] Load DiT: 189 ms
+[GGUF] ../models/MiniMax-Music3-vocoder-F32.gguf: 182 tensors, data at offset 12896
 [Load] VAE backend: Vulkan0 (shared)
 [VAE] Backend: Vulkan0, Weight buffer: 103.4 MB
 [VAE] Loaded: 4 blocks, upsample=512x, F32 activations
-[Pipeline] VAE: ../models/MiniMax-Music3-vocoder-F32.gguf, 108 ms
-[Prompt] 40 tokens
-[AR] Prefill 131 ms, 40 tokens, CFG=1.50, top_k=50
-[AR] Frame 0/200
-[AR] Frame 100/200
-[Debug] frame_hiddens: [200, 8, 4096] first4: 0.921867 1.897966 -0.904081 -0.699011
-[AR] 200 frames (8.0s of music), 29.5 s (147.7 ms/frame)
+[Store] Load VAE: 106 ms
 [Debug] noise: [689, 128] first4: 0.194019 2.161374 -0.172051 0.849060
-[DiT] Graph: 1344 nodes, T=689
+[DiT] Graph: 1344 nodes, T=689, B=2
 [Debug] temb_t: [2048] first4: 3.715232 -3.035194 -3.836430 4.005782
 [Debug] hidden_after_preprocess: [689, 2304] first4: 0.058765 3.944272 -0.796806 2.207703
 [Debug] hidden_after_proj_in: [689, 2048] first4: 3.662231 -5.700195 -2.072266 -0.211792
@@ -186,15 +192,29 @@ load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/
 [Debug] dit_x0: [689, 128] first4: 0.514533 3.623133 -0.819311 1.521214
 [Debug] window0_cond: [689, 2048] first4: 0.292676 -0.052296 0.071348 0.078284
 [Debug] window0_latent: [689, 128] first4: 0.514533 3.623133 -0.819311 1.521214
-[DiT] Window 1/1: T=689, 30 steps, 2062 ms (68.7 ms/step)
-[DiT] CFG=1.70, 1 windows, 2.1 s
+[DiT] Window 1/1: T=689, 30 steps, 2027 ms (67.6 ms/step)
+[DiT] CFG=1.70, 1 windows, 2.0 s
 [VAE] Graph: 398 nodes, T_latent=689
 [VAE] Decoded: T_latent=689 -> T_audio=352768 (8.00s @ 44.1kHz)
 [Debug] vae_audio: [352768, 2] first4: -0.002461 -0.008611 -0.007055 -0.009131
-[VAE] Decode: 1 windows -> 8.0s of audio, 110 ms
-[Done] 31.7 s total
+[VAE] Decode: 1 windows -> 8.0s of audio, 111 ms
+[Done] 34.7 s total
+[Store] Unload VAE (103.4 MB)
+[Store] Unload DiT (1611.2 MB)
+[Store] Unload Cond (48.0 MB)
 [WAV] Wrote ggml-dit/output.wav: 352768 samples, 44100 Hz, stereo
 [Out] ggml-dit/output.wav
+[Out] ggml-dit/output.json
+Cannot initialize model with low cpu memory usage because `accelerate` was not found in the environment. Defaulting to `low_cpu_mem_usage=False`. It is strongly recommended to install `accelerate` for faster and less memory-intense model loading. You can do so with: 
+```
+pip install accelerate
+```
+.
+Cannot initialize model with low cpu memory usage because `accelerate` was not found in the environment. Defaulting to `low_cpu_mem_usage=False`. It is strongly recommended to install `accelerate` for faster and less memory-intense model loading. You can do so with: 
+```
+pip install accelerate
+```
+.
 [Request] Loaded request0.json
 [DiT] steps=30, CFG=1.7 | mm3-dit-Q5_K_M.gguf
 [GGML] Running MiniMax-Music3-transformer-Q5_K_M.gguf...
@@ -204,46 +224,44 @@ load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/
 [Python] Decoding audio...
 [Python] Done, 104 dump files
 [DiT] Cosine similarities GGML vs Python
-  stage                          ggml vs python
-  noise                                1.000000
-  temb_t                               0.999983
-  hidden_after_preprocess              1.000000
-  hidden_after_proj_in                 0.999757
-  layer0_sa_output                     0.999927
-  hidden_after_layer0                  0.999949
-  hidden_after_layer6                  0.999976
-  hidden_after_layer12                 0.999964
-  hidden_after_layer18                 0.999959
-  hidden_after_layer35                 0.999873
-  dit_step0_vt_cond                    0.999396
-  dit_step0_vt_uncond                  0.999002
-  dit_step0_vt                         0.999576
-  dit_step0_xt                         0.999998
-  dit_step5_vt_cond                    0.998729
-  dit_step5_vt                         0.998466
-  dit_step5_xt                         0.999830
-  dit_step10_vt_cond                   0.998425
-  dit_step10_vt                        0.998329
-  dit_step10_xt                        0.999430
-  dit_step15_vt_cond                   0.998146
-  dit_step15_vt                        0.998046
-  dit_step15_xt                        0.999095
-  dit_step20_vt_cond                   0.997595
-  dit_step20_vt                        0.997487
-  dit_step20_xt                        0.998859
-  dit_step25_vt_cond                   0.997380
-  dit_step25_vt                        0.997313
-  dit_step25_xt                        0.998676
-  dit_step29_vt_cond                   0.997555
-  dit_step29_vt                        0.997526
-  dit_x0                               0.998576
-  vae_audio                            0.995580
-  vae_audio (STFT cosine)              0.997801
+noise: ggml vs python 1.000000
+temb_t: ggml vs python 0.999983
+hidden_after_preprocess: ggml vs python 1.000000
+hidden_after_proj_in: ggml vs python 0.999757
+layer0_sa_output: ggml vs python 0.999927
+hidden_after_layer0: ggml vs python 0.999949
+hidden_after_layer6: ggml vs python 0.999976
+hidden_after_layer12: ggml vs python 0.999964
+hidden_after_layer18: ggml vs python 0.999959
+hidden_after_layer35: ggml vs python 0.999873
+dit_step0_vt_cond: ggml vs python 0.999396
+dit_step0_vt_uncond: ggml vs python 0.999002
+dit_step0_vt: ggml vs python 0.999576
+dit_step0_xt: ggml vs python 0.999998
+dit_step5_vt_cond: ggml vs python 0.998729
+dit_step5_vt: ggml vs python 0.998466
+dit_step5_xt: ggml vs python 0.999830
+dit_step10_vt_cond: ggml vs python 0.998425
+dit_step10_vt: ggml vs python 0.998329
+dit_step10_xt: ggml vs python 0.999430
+dit_step15_vt_cond: ggml vs python 0.998146
+dit_step15_vt: ggml vs python 0.998046
+dit_step15_xt: ggml vs python 0.999095
+dit_step20_vt_cond: ggml vs python 0.997595
+dit_step20_vt: ggml vs python 0.997487
+dit_step20_xt: ggml vs python 0.998859
+dit_step25_vt_cond: ggml vs python 0.997380
+dit_step25_vt: ggml vs python 0.997313
+dit_step25_xt: ggml vs python 0.998676
+dit_step29_vt_cond: ggml vs python 0.997555
+dit_step29_vt: ggml vs python 0.997526
+dit_x0: ggml vs python 0.998576
+vae_audio: ggml vs python 0.995580
+vae_audio (STFT cosine): ggml vs python 0.997801
 [DiT] Error growth GGML vs Python
-  stage                         cos    max_err   mean_err     mean_A      std_A     mean_B      std_B
-  dit_step0_xt             0.999998   0.008228   0.001644   0.000557   0.966085   0.000641   0.965970
-  dit_step5_xt             0.999830   0.146083   0.013195   0.011684   0.927497   0.012502   0.927597
-  dit_step10_xt            0.999430   0.394965   0.027652   0.022953   1.072399   0.024634   1.073991
-  dit_step15_xt            0.999095   0.628753   0.043539   0.034401   1.337955   0.037044   1.341579
-  dit_step20_xt            0.998859   0.860404   0.061027   0.045641   1.667091   0.049350   1.672942
-  dit_step25_xt            0.998676   1.154478   0.080032   0.056539   2.029273   0.061458   2.037351
+dit_step0_xt: cos 0.999998, max_err 0.008228, mean_err 0.001644, mean_A 0.000557, std_A 0.966085, mean_B 0.000641, std_B 0.965970
+dit_step5_xt: cos 0.999830, max_err 0.146083, mean_err 0.013195, mean_A 0.011684, std_A 0.927497, mean_B 0.012502, std_B 0.927597
+dit_step10_xt: cos 0.999430, max_err 0.394965, mean_err 0.027652, mean_A 0.022953, std_A 1.072399, mean_B 0.024634, std_B 1.073991
+dit_step15_xt: cos 0.999095, max_err 0.628753, mean_err 0.043539, mean_A 0.034401, std_A 1.337955, mean_B 0.037044, std_B 1.341579
+dit_step20_xt: cos 0.998859, max_err 0.860404, mean_err 0.061027, mean_A 0.045641, std_A 1.667091, mean_B 0.049350, std_B 1.672942
+dit_step25_xt: cos 0.998676, max_err 1.154478, mean_err 0.080032, mean_A 0.056539, std_A 2.029273, mean_B 0.061458, std_B 2.037351

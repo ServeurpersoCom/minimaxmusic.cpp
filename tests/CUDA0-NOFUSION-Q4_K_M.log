@@ -1,4 +1,3 @@
-minimaxmusic.cpp 432dd40 (2026-08-14)
 [Registry] MiniMax-Music3-condition_encoder-F32.gguf -> mm3-cond
 [Registry] MiniMax-Music3-language_model-BF16.gguf -> mm3-lm
 [Registry] MiniMax-Music3-language_model-Q5_K_M.gguf -> mm3-lm
@@ -12,8 +11,8 @@ minimaxmusic.cpp 432dd40 (2026-08-14)
 [Registry] MiniMax-Music3-transformer-Q6_K.gguf -> mm3-dit
 [Registry] MiniMax-Music3-transformer-Q8_0.gguf -> mm3-dit
 [Registry] MiniMax-Music3-vocoder-F32.gguf -> mm3-vae
+[Store] Created (policy=STRICT)
 [Pipeline] Flash attention disabled
-[BPE] Loaded from GGUF: 151675 vocab, 151387 merges
 ggml_cuda_init: found 1 CUDA devices (Total VRAM: 97247 MiB):
   Device 0: NVIDIA RTX PRO 6000 Blackwell Workstation Edition, compute capability 12.0, VMM: yes, VRAM: 97247 MiB
 load_backend: loaded CUDA backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-cuda.so
@@ -26,175 +25,196 @@ load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/
 [Qwen3] MLP: gate+up fused
 [WeightCtx] Loaded 399 tensors, 16374.2 MB into backend
 [LM-KV] Allocated 2 sets x 36 layers (4D batched), 2880.0 MB
-[Pipeline] LM: ../models/MiniMax-Music3-language_model-BF16.gguf, 1511 ms
+[Store] Load LM: 1367 ms
 [GGUF] ../models/MiniMax-Music3-rvq_depth_decoder-BF16.gguf: 47 tensors, data at offset 3456
 [Load] Depth backend: CUDA0 (shared)
 [WeightCtx] Loaded 47 tensors, 1232.4 MB into backend
 [Depth] Loaded: 4 layers, dim 4096, 7 heads
-[Pipeline] Depth: ../models/MiniMax-Music3-rvq_depth_decoder-BF16.gguf, 113 ms
+[Store] Load Depth: 101 ms
+[BPE] Loaded from GGUF: 151675 vocab, 151387 merges
+[Prompt] 40 tokens
+[AR] Prefill 70 ms, 40 tokens, CFG=1.50, top_k=50, songs=1
+[AR] Frame 0/200
+[AR] Frame 100/200
+[AR] Song 0: 200 frames (8.0s of music)
+[Debug] frame_hiddens: [200, 8, 4096] first4: -1.355042 -1.043213 -0.754630 0.104368
+[AR] 200 frames total, 4.2 s (21.0 ms/frame)
+[Store] Unload Depth (1232.4 MB)
+[Store] Unload LM (16374.2 MB)
 [GGUF] ../models/MiniMax-Music3-condition_encoder-F32.gguf: 4 tensors, data at offset 640
-[Load] Cond backend: CUDA0 (shared)
+load_backend: loaded CUDA backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-cuda.so
+load_backend: loaded Vulkan backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-vulkan.so
+load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/libggml-cpu-zen4.so
+[Load] Cond backend: CUDA0 (CPU threads: 16)
 [Cond] Loaded: mix over 8 states, proj 4096 -> 2048
-[Pipeline] Cond: ../models/MiniMax-Music3-condition_encoder-F32.gguf, 48 ms
+[Store] Load Cond: 47 ms
 [GGUF] ../models/MiniMax-Music3-transformer-Q4_K_M.gguf: 441 tensors, data at offset 31712
 [Load] DiT backend: CUDA0 (shared)
 [WeightCtx] Loaded 436 tensors, 1322.6 MB into backend
 [DiT] Loaded: 36 layers, dim 2048, flash_attn=1
-[Pipeline] DiT: ../models/MiniMax-Music3-transformer-Q4_K_M.gguf, 125 ms
-[GGUF] ../models/MiniMax-Music3-vocoder-F32.gguf: 91 tensors, data at offset 6240
+[Store] Load DiT: 112 ms
+[GGUF] ../models/MiniMax-Music3-vocoder-F32.gguf: 182 tensors, data at offset 12896
 [Load] VAE backend: CUDA0 (shared)
 [VAE] Backend: CUDA0, Weight buffer: 103.4 MB
 [VAE] Loaded: 4 blocks, upsample=512x, F32 activations
-[Pipeline] VAE: ../models/MiniMax-Music3-vocoder-F32.gguf, 103 ms
-[Prompt] 40 tokens
-[AR] Prefill 67 ms, 40 tokens, CFG=1.50, top_k=50
-[AR] Frame 0/200
-[AR] Frame 100/200
-[Debug] frame_hiddens: [200, 8, 4096] first4: -1.355042 -1.043213 -0.754630 0.104368
-[AR] 200 frames (8.0s of music), 4.2 s (21.0 ms/frame)
+[Store] Load VAE: 103 ms
 [Debug] noise: [689, 128] first4: 0.194019 2.161374 -0.172051 0.849060
-[DiT] Graph: 1344 nodes, T=689
+[DiT] Graph: 1344 nodes, T=689, B=2
 [Debug] temb_t: [2048] first4: 3.473374 -2.939100 -3.846277 3.896155
 [Debug] hidden_after_preprocess: [689, 2304] first4: 0.341482 4.083567 -1.024049 1.790691
-[Debug] hidden_after_proj_in: [689, 2048] first4: 5.319824 -4.328886 -6.038661 -1.736557
-[Debug] layer0_sa_output: [690, 2048] first4: 1.310125 -1.718272 0.063206 1.547024
-[Debug] hidden_after_layer0: [690, 2048] first4: -2.501571 -1.013112 -3.658196 3.645564
-[Debug] hidden_after_layer6: [690, 2048] first4: -4.674856 -0.311768 0.012371 1.765688
-[Debug] hidden_after_layer12: [690, 2048] first4: -2.561811 -1.651661 1.193222 3.252038
-[Debug] hidden_after_layer18: [690, 2048] first4: -2.703217 -1.592793 -0.671125 1.132692
-[Debug] hidden_after_layer35: [690, 2048] first4: -1.418328 0.274609 -4.797642 0.484802
-[Debug] dit_step0_vt_cond: [689, 128] first4: -0.607919 -1.841792 -0.665674 -0.455563
-[Debug] dit_step0_vt_uncond: [689, 128] first4: -0.325433 -2.236379 -0.500730 -0.694351
-[Debug] dit_step0_vt: [689, 128] first4: -0.805660 -1.565582 -0.781135 -0.288411
-[Debug] dit_step0_xt: [689, 128] first4: 0.167164 2.109188 -0.198088 0.839446
-[Debug] dit_step1_vt_cond: [689, 128] first4: -0.733693 -1.762534 -0.570244 -0.364172
-[Debug] dit_step1_vt_uncond: [689, 128] first4: -0.416253 -1.770336 -0.408768 -0.738416
-[Debug] dit_step1_vt: [689, 128] first4: -0.955902 -1.757073 -0.683278 -0.102201
-[Debug] dit_step1_xt: [689, 128] first4: 0.135300 2.050619 -0.220864 0.836040
-[Debug] dit_step2_vt_cond: [689, 128] first4: -0.707992 -1.683956 -0.482922 -0.216078
-[Debug] dit_step2_vt_uncond: [689, 128] first4: -0.757124 -1.953749 -0.688204 -0.710122
-[Debug] dit_step2_vt: [689, 128] first4: -0.673599 -1.495101 -0.339225 0.129753
-[Debug] dit_step2_xt: [689, 128] first4: 0.112847 2.000782 -0.232172 0.840365
-[Debug] dit_step3_vt_cond: [689, 128] first4: -0.717729 -1.566605 -0.494752 -0.014240
-[Debug] dit_step3_vt_uncond: [689, 128] first4: -0.371267 -1.837218 -0.675804 -0.421824
-[Debug] dit_step3_vt: [689, 128] first4: -0.960253 -1.377175 -0.368016 0.271069
-[Debug] dit_step3_xt: [689, 128] first4: 0.080838 1.954876 -0.244439 0.849400
-[Debug] dit_step4_vt_cond: [689, 128] first4: -0.743442 -1.426017 -0.425705 0.191908
-[Debug] dit_step4_vt_uncond: [689, 128] first4: -0.360584 -1.533524 -0.622229 -0.056078
-[Debug] dit_step4_vt: [689, 128] first4: -1.011443 -1.350762 -0.288139 0.365499
-[Debug] dit_step4_xt: [689, 128] first4: 0.047124 1.909851 -0.254044 0.861584
-[Debug] dit_step5_vt_cond: [689, 128] first4: -0.801021 -1.296092 -0.399899 0.322597
-[Debug] dit_step5_vt_uncond: [689, 128] first4: -0.450619 -1.293015 -0.546951 0.036960
-[Debug] dit_step5_vt: [689, 128] first4: -1.046302 -1.298246 -0.296963 0.522543
-[Debug] dit_step5_xt: [689, 128] first4: 0.012247 1.866576 -0.263942 0.879002
-[Debug] dit_step6_vt_cond: [689, 128] first4: -0.923308 -1.172941 -0.424732 0.482586
-[Debug] dit_step6_vt_uncond: [689, 128] first4: -0.492302 -1.197339 -0.614121 0.366070
-[Debug] dit_step6_vt: [689, 128] first4: -1.225012 -1.155863 -0.292160 0.564147
-[Debug] dit_step6_xt: [689, 128] first4: -0.028587 1.828047 -0.273681 0.897807
-[Debug] dit_step7_vt_cond: [689, 128] first4: -0.953657 -0.990547 -0.314551 0.683628
-[Debug] dit_step7_vt_uncond: [689, 128] first4: -0.600837 -1.085715 -0.737217 0.711332
-[Debug] dit_step7_vt: [689, 128] first4: -1.200632 -0.923929 -0.018685 0.664235
-[Debug] dit_step7_xt: [689, 128] first4: -0.068608 1.797250 -0.274304 0.919948
-[Debug] dit_step8_vt_cond: [689, 128] first4: -0.956234 -0.788257 -0.226751 0.835689
-[Debug] dit_step8_vt_uncond: [689, 128] first4: -0.719045 -0.912609 -0.675185 0.909724
-[Debug] dit_step8_vt: [689, 128] first4: -1.122265 -0.701211 0.087153 0.783864
-[Debug] dit_step8_xt: [689, 128] first4: -0.106017 1.773876 -0.271399 0.946077
-[Debug] dit_step9_vt_cond: [689, 128] first4: -1.007740 -0.561258 -0.288469 0.957781
-[Debug] dit_step9_vt_uncond: [689, 128] first4: -0.730711 -0.704564 -0.480889 1.077141
-[Debug] dit_step9_vt: [689, 128] first4: -1.201661 -0.460944 -0.153775 0.874229
-[Debug] dit_step9_xt: [689, 128] first4: -0.146072 1.758511 -0.276525 0.975218
-[Debug] dit_step10_vt_cond: [689, 128] first4: -1.100478 -0.388678 -0.350755 1.078937
-[Debug] dit_step10_vt_uncond: [689, 128] first4: -0.805004 -0.512450 -0.384599 1.158343
-[Debug] dit_step10_vt: [689, 128] first4: -1.307310 -0.302037 -0.327065 1.023353
-[Debug] dit_step10_xt: [689, 128] first4: -0.189649 1.748443 -0.287427 1.009329
-[Debug] dit_step11_vt_cond: [689, 128] first4: -1.051222 -0.143382 -0.366034 1.152157
-[Debug] dit_step11_vt_uncond: [689, 128] first4: -0.865800 -0.333045 -0.342906 1.264804
-[Debug] dit_step11_vt: [689, 128] first4: -1.181018 -0.010619 -0.382224 1.073304
-[Debug] dit_step11_xt: [689, 128] first4: -0.229016 1.748089 -0.300168 1.045106
-[Debug] dit_step12_vt_cond: [689, 128] first4: -1.011425 0.126086 -0.313249 1.307207
-[Debug] dit_step12_vt_uncond: [689, 128] first4: -0.968694 -0.142968 -0.259326 1.346893
-[Debug] dit_step12_vt: [689, 128] first4: -1.041338 0.314424 -0.350995 1.279426
-[Debug] dit_step12_xt: [689, 128] first4: -0.263728 1.758570 -0.311867 1.087754
-[Debug] dit_step13_vt_cond: [689, 128] first4: -1.027819 0.278894 -0.432119 1.420148
-[Debug] dit_step13_vt_uncond: [689, 128] first4: -0.893921 0.196344 -0.143413 1.423149
-[Debug] dit_step13_vt: [689, 128] first4: -1.121547 0.336680 -0.634213 1.418048
-[Debug] dit_step13_xt: [689, 128] first4: -0.301113 1.769793 -0.333008 1.135022
-[Debug] dit_step14_vt_cond: [689, 128] first4: -1.053087 0.509363 -0.400669 1.532015
-[Debug] dit_step14_vt_uncond: [689, 128] first4: -0.895101 0.418391 -0.180055 1.462688
-[Debug] dit_step14_vt: [689, 128] first4: -1.163678 0.573044 -0.555098 1.580543
-[Debug] dit_step14_xt: [689, 128] first4: -0.339902 1.788894 -0.351511 1.187707
-[Debug] dit_step15_vt_cond: [689, 128] first4: -0.993251 0.700626 -0.419231 1.597652
-[Debug] dit_step15_vt_uncond: [689, 128] first4: -0.954172 0.654365 -0.225963 1.547737
-[Debug] dit_step15_vt: [689, 128] first4: -1.020607 0.733009 -0.554519 1.632593
-[Debug] dit_step15_xt: [689, 128] first4: -0.373922 1.813328 -0.369995 1.242127
-[Debug] dit_step16_vt_cond: [689, 128] first4: -0.972023 0.865466 -0.452506 1.646657
-[Debug] dit_step16_vt_uncond: [689, 128] first4: -0.892405 0.869950 -0.204558 1.592927
-[Debug] dit_step16_vt: [689, 128] first4: -1.027756 0.862326 -0.626070 1.684267
-[Debug] dit_step16_xt: [689, 128] first4: -0.408181 1.842072 -0.390864 1.298269
-[Debug] dit_step17_vt_cond: [689, 128] first4: -1.011633 1.070173 -0.485077 1.755754
-[Debug] dit_step17_vt_uncond: [689, 128] first4: -0.910177 1.119122 -0.302710 1.664020
-[Debug] dit_step17_vt: [689, 128] first4: -1.082653 1.035909 -0.612734 1.819968
-[Debug] dit_step17_xt: [689, 128] first4: -0.444269 1.876602 -0.411289 1.358934
-[Debug] dit_step18_vt_cond: [689, 128] first4: -1.013109 1.261083 -0.509423 1.730269
-[Debug] dit_step18_vt_uncond: [689, 128] first4: -0.843340 1.293872 -0.303013 1.639616
-[Debug] dit_step18_vt: [689, 128] first4: -1.131948 1.238130 -0.653909 1.793726
-[Debug] dit_step18_xt: [689, 128] first4: -0.482001 1.917873 -0.433086 1.418725
-[Debug] dit_step19_vt_cond: [689, 128] first4: -0.926344 1.452282 -0.407105 1.827378
-[Debug] dit_step19_vt_uncond: [689, 128] first4: -0.770324 1.477315 -0.269500 1.692424
-[Debug] dit_step19_vt: [689, 128] first4: -1.035558 1.434759 -0.503429 1.921845
-[Debug] dit_step19_xt: [689, 128] first4: -0.516519 1.965698 -0.449867 1.482787
-[Debug] dit_step20_vt_cond: [689, 128] first4: -0.837397 1.491045 -0.478594 1.807745
-[Debug] dit_step20_vt_uncond: [689, 128] first4: -0.761918 1.670031 -0.304180 1.742039
-[Debug] dit_step20_vt: [689, 128] first4: -0.890232 1.365755 -0.600684 1.853738
-[Debug] dit_step20_xt: [689, 128] first4: -0.546194 2.011224 -0.469889 1.544578
-[Debug] dit_step21_vt_cond: [689, 128] first4: -0.762068 1.708549 -0.369733 1.852278
-[Debug] dit_step21_vt_uncond: [689, 128] first4: -0.632578 1.733281 -0.304306 1.723700
-[Debug] dit_step21_vt: [689, 128] first4: -0.852710 1.691237 -0.415532 1.942282
-[Debug] dit_step21_xt: [689, 128] first4: -0.574617 2.067598 -0.483740 1.609321
-[Debug] dit_step22_vt_cond: [689, 128] first4: -0.729668 1.805545 -0.499176 1.805179
-[Debug] dit_step22_vt_uncond: [689, 128] first4: -0.653154 1.849125 -0.378007 1.708668
-[Debug] dit_step22_vt: [689, 128] first4: -0.783228 1.775039 -0.583995 1.872736
-[Debug] dit_step22_xt: [689, 128] first4: -0.600725 2.126766 -0.503207 1.671745
-[Debug] dit_step23_vt_cond: [689, 128] first4: -0.692031 1.951750 -0.506135 1.773954
-[Debug] dit_step23_vt_uncond: [689, 128] first4: -0.586270 1.997794 -0.324540 1.745780
-[Debug] dit_step23_vt: [689, 128] first4: -0.766063 1.919519 -0.633252 1.793676
-[Debug] dit_step23_xt: [689, 128] first4: -0.626260 2.190750 -0.524315 1.731534
-[Debug] dit_step24_vt_cond: [689, 128] first4: -0.687575 2.097284 -0.492788 1.797827
-[Debug] dit_step24_vt_uncond: [689, 128] first4: -0.598347 2.074926 -0.428355 1.701051
-[Debug] dit_step24_vt: [689, 128] first4: -0.750035 2.112935 -0.537891 1.865570
-[Debug] dit_step24_xt: [689, 128] first4: -0.651261 2.261181 -0.542245 1.793720
-[Debug] dit_step25_vt_cond: [689, 128] first4: -0.659781 2.207962 -0.572476 1.820246
-[Debug] dit_step25_vt_uncond: [689, 128] first4: -0.567499 2.200060 -0.468321 1.748133
-[Debug] dit_step25_vt: [689, 128] first4: -0.724378 2.213494 -0.645384 1.870725
-[Debug] dit_step25_xt: [689, 128] first4: -0.675407 2.334965 -0.563758 1.856078
-[Debug] dit_step26_vt_cond: [689, 128] first4: -0.686106 2.344135 -0.618449 1.833198
-[Debug] dit_step26_vt_uncond: [689, 128] first4: -0.575970 2.318460 -0.567772 1.712882
-[Debug] dit_step26_vt: [689, 128] first4: -0.763201 2.362108 -0.653922 1.917420
-[Debug] dit_step26_xt: [689, 128] first4: -0.700847 2.413701 -0.585555 1.919992
-[Debug] dit_step27_vt_cond: [689, 128] first4: -0.654559 2.521782 -0.631035 1.859573
-[Debug] dit_step27_vt_uncond: [689, 128] first4: -0.543953 2.481209 -0.596786 1.772617
-[Debug] dit_step27_vt: [689, 128] first4: -0.731983 2.550183 -0.655009 1.920442
-[Debug] dit_step27_xt: [689, 128] first4: -0.725247 2.498707 -0.607389 1.984006
-[Debug] dit_step28_vt_cond: [689, 128] first4: -0.639353 2.524750 -0.780524 1.777435
-[Debug] dit_step28_vt_uncond: [689, 128] first4: -0.651023 2.504107 -0.710073 1.720699
-[Debug] dit_step28_vt: [689, 128] first4: -0.631184 2.539200 -0.829839 1.817150
-[Debug] dit_step28_xt: [689, 128] first4: -0.746286 2.583347 -0.635050 2.044578
-[Debug] dit_step29_vt_cond: [689, 128] first4: -0.600404 2.633286 -0.841525 1.777845
-[Debug] dit_step29_vt_uncond: [689, 128] first4: -0.572039 2.624519 -0.755004 1.758740
-[Debug] dit_step29_vt: [689, 128] first4: -0.620260 2.639422 -0.902090 1.791219
-[Debug] dit_step29_xt: [689, 128] first4: -0.766962 2.671328 -0.665120 2.104285
-[Debug] dit_x0: [689, 128] first4: -0.766962 2.671328 -0.665120 2.104285
+[Debug] hidden_after_proj_in: [689, 2048] first4: 5.319823 -4.328885 -6.038660 -1.736557
+[Debug] layer0_sa_output: [690, 2048] first4: 1.310017 -1.718345 0.063078 1.546748
+[Debug] hidden_after_layer0: [690, 2048] first4: -2.501665 -1.013151 -3.658370 3.644696
+[Debug] hidden_after_layer6: [690, 2048] first4: -4.655267 -0.287687 0.026702 1.791035
+[Debug] hidden_after_layer12: [690, 2048] first4: -2.504589 -1.578925 1.209268 3.278944
+[Debug] hidden_after_layer18: [690, 2048] first4: -2.677608 -1.473281 -0.616087 1.134423
+[Debug] hidden_after_layer35: [690, 2048] first4: -1.394914 0.351396 -4.714746 0.537621
+[Debug] dit_step0_vt_cond: [689, 128] first4: -0.621199 -1.807535 -0.650863 -0.444658
+[Debug] dit_step0_vt_uncond: [689, 128] first4: -0.274531 -2.211805 -0.471493 -0.666102
+[Debug] dit_step0_vt: [689, 128] first4: -0.863867 -1.524546 -0.776422 -0.289647
+[Debug] dit_step0_xt: [689, 128] first4: 0.165223 2.110556 -0.197931 0.839405
+[Debug] dit_step1_vt_cond: [689, 128] first4: -0.747409 -1.780665 -0.590793 -0.381269
+[Debug] dit_step1_vt_uncond: [689, 128] first4: -0.385127 -1.752235 -0.344022 -0.739594
+[Debug] dit_step1_vt: [689, 128] first4: -1.001007 -1.800566 -0.763533 -0.130441
+[Debug] dit_step1_xt: [689, 128] first4: 0.131856 2.050537 -0.223382 0.835057
+[Debug] dit_step2_vt_cond: [689, 128] first4: -0.743548 -1.682285 -0.504244 -0.217875
+[Debug] dit_step2_vt_uncond: [689, 128] first4: -0.710222 -1.953305 -0.623713 -0.720443
+[Debug] dit_step2_vt: [689, 128] first4: -0.766877 -1.492571 -0.420616 0.133922
+[Debug] dit_step2_xt: [689, 128] first4: 0.106294 2.000784 -0.237403 0.839521
+[Debug] dit_step3_vt_cond: [689, 128] first4: -0.711629 -1.574798 -0.497576 -0.039270
+[Debug] dit_step3_vt_uncond: [689, 128] first4: -0.359675 -1.834507 -0.645048 -0.398877
+[Debug] dit_step3_vt: [689, 128] first4: -0.957996 -1.393001 -0.394346 0.212455
+[Debug] dit_step3_xt: [689, 128] first4: 0.074361 1.954351 -0.250548 0.846603
+[Debug] dit_step4_vt_cond: [689, 128] first4: -0.782477 -1.425823 -0.452518 0.190264
+[Debug] dit_step4_vt_uncond: [689, 128] first4: -0.297932 -1.501732 -0.595393 -0.000975
+[Debug] dit_step4_vt: [689, 128] first4: -1.121659 -1.372687 -0.352506 0.324131
+[Debug] dit_step4_xt: [689, 128] first4: 0.036972 1.908595 -0.262298 0.857407
+[Debug] dit_step5_vt_cond: [689, 128] first4: -0.827804 -1.285741 -0.428521 0.323969
+[Debug] dit_step5_vt_uncond: [689, 128] first4: -0.442634 -1.291834 -0.551285 0.061322
+[Debug] dit_step5_vt: [689, 128] first4: -1.097423 -1.281476 -0.342586 0.507822
+[Debug] dit_step5_xt: [689, 128] first4: 0.000391 1.865879 -0.273718 0.874335
+[Debug] dit_step6_vt_cond: [689, 128] first4: -0.902509 -1.155173 -0.408568 0.503355
+[Debug] dit_step6_vt_uncond: [689, 128] first4: -0.450524 -1.214618 -0.660313 0.354511
+[Debug] dit_step6_vt: [689, 128] first4: -1.218899 -1.113561 -0.232346 0.607545
+[Debug] dit_step6_xt: [689, 128] first4: -0.040239 1.828760 -0.281462 0.894586
+[Debug] dit_step7_vt_cond: [689, 128] first4: -0.953582 -0.965728 -0.307000 0.702887
+[Debug] dit_step7_vt_uncond: [689, 128] first4: -0.630095 -1.083773 -0.753523 0.723318
+[Debug] dit_step7_vt: [689, 128] first4: -1.180024 -0.883096 0.005566 0.688585
+[Debug] dit_step7_xt: [689, 128] first4: -0.079573 1.799323 -0.281277 0.917539
+[Debug] dit_step8_vt_cond: [689, 128] first4: -1.018095 -0.817609 -0.328189 0.818780
+[Debug] dit_step8_vt_uncond: [689, 128] first4: -0.732260 -0.880573 -0.698589 0.950044
+[Debug] dit_step8_vt: [689, 128] first4: -1.218178 -0.773534 -0.068910 0.726895
+[Debug] dit_step8_xt: [689, 128] first4: -0.120179 1.773539 -0.283574 0.941769
+[Debug] dit_step9_vt_cond: [689, 128] first4: -1.035028 -0.571669 -0.324888 0.947931
+[Debug] dit_step9_vt_uncond: [689, 128] first4: -0.808856 -0.735822 -0.585598 1.074177
+[Debug] dit_step9_vt: [689, 128] first4: -1.193348 -0.456763 -0.142392 0.859559
+[Debug] dit_step9_xt: [689, 128] first4: -0.159957 1.758314 -0.288320 0.970421
+[Debug] dit_step10_vt_cond: [689, 128] first4: -1.055950 -0.348806 -0.342800 1.082972
+[Debug] dit_step10_vt_uncond: [689, 128] first4: -0.862926 -0.552315 -0.476209 1.154603
+[Debug] dit_step10_vt: [689, 128] first4: -1.191067 -0.206350 -0.249414 1.032830
+[Debug] dit_step10_xt: [689, 128] first4: -0.199659 1.751435 -0.296634 1.004849
+[Debug] dit_step11_vt_cond: [689, 128] first4: -1.015361 -0.131280 -0.319553 1.201730
+[Debug] dit_step11_vt_uncond: [689, 128] first4: -0.855245 -0.343387 -0.358908 1.259456
+[Debug] dit_step11_vt: [689, 128] first4: -1.127443 0.017195 -0.292004 1.161322
+[Debug] dit_step11_xt: [689, 128] first4: -0.237241 1.752008 -0.306367 1.043559
+[Debug] dit_step12_vt_cond: [689, 128] first4: -1.009025 0.112310 -0.322910 1.319052
+[Debug] dit_step12_vt_uncond: [689, 128] first4: -0.901670 -0.127652 -0.251058 1.311247
+[Debug] dit_step12_vt: [689, 128] first4: -1.084174 0.280284 -0.373207 1.324515
+[Debug] dit_step12_xt: [689, 128] first4: -0.273380 1.761351 -0.318808 1.087710
+[Debug] dit_step13_vt_cond: [689, 128] first4: -1.092271 0.262591 -0.462590 1.364298
+[Debug] dit_step13_vt_uncond: [689, 128] first4: -0.879953 0.154954 -0.187820 1.382699
+[Debug] dit_step13_vt: [689, 128] first4: -1.240894 0.337936 -0.654928 1.351417
+[Debug] dit_step13_xt: [689, 128] first4: -0.314743 1.772616 -0.340639 1.132757
+[Debug] dit_step14_vt_cond: [689, 128] first4: -1.046313 0.498307 -0.461116 1.503875
+[Debug] dit_step14_vt_uncond: [689, 128] first4: -0.920557 0.410305 -0.246307 1.476611
+[Debug] dit_step14_vt: [689, 128] first4: -1.134343 0.559908 -0.611482 1.522960
+[Debug] dit_step14_xt: [689, 128] first4: -0.352554 1.791279 -0.361021 1.183523
+[Debug] dit_step15_vt_cond: [689, 128] first4: -1.035297 0.693956 -0.450204 1.623777
+[Debug] dit_step15_vt_uncond: [689, 128] first4: -0.926898 0.646267 -0.220164 1.567225
+[Debug] dit_step15_vt: [689, 128] first4: -1.111177 0.727338 -0.611232 1.663364
+[Debug] dit_step15_xt: [689, 128] first4: -0.389594 1.815524 -0.381396 1.238968
+[Debug] dit_step16_vt_cond: [689, 128] first4: -0.999638 0.904051 -0.412287 1.671841
+[Debug] dit_step16_vt_uncond: [689, 128] first4: -0.941539 0.852787 -0.341528 1.601011
+[Debug] dit_step16_vt: [689, 128] first4: -1.040306 0.939936 -0.461818 1.721421
+[Debug] dit_step16_xt: [689, 128] first4: -0.424271 1.846855 -0.396790 1.296349
+[Debug] dit_step17_vt_cond: [689, 128] first4: -0.994757 1.055006 -0.479309 1.717688
+[Debug] dit_step17_vt_uncond: [689, 128] first4: -0.990737 1.077699 -0.323479 1.649263
+[Debug] dit_step17_vt: [689, 128] first4: -0.997570 1.039121 -0.588389 1.765585
+[Debug] dit_step17_xt: [689, 128] first4: -0.457523 1.881492 -0.416403 1.355202
+[Debug] dit_step18_vt_cond: [689, 128] first4: -0.928169 1.284149 -0.396797 1.759125
+[Debug] dit_step18_vt_uncond: [689, 128] first4: -0.927285 1.272468 -0.383827 1.627802
+[Debug] dit_step18_vt: [689, 128] first4: -0.928788 1.292326 -0.405877 1.851052
+[Debug] dit_step18_xt: [689, 128] first4: -0.488482 1.924570 -0.429932 1.416903
+[Debug] dit_step19_vt_cond: [689, 128] first4: -0.867354 1.409108 -0.323001 1.802319
+[Debug] dit_step19_vt_uncond: [689, 128] first4: -0.885613 1.502740 -0.240406 1.673116
+[Debug] dit_step19_vt: [689, 128] first4: -0.854573 1.343566 -0.380817 1.892760
+[Debug] dit_step19_xt: [689, 128] first4: -0.516968 1.969355 -0.442626 1.479995
+[Debug] dit_step20_vt_cond: [689, 128] first4: -0.839404 1.561268 -0.445687 1.808472
+[Debug] dit_step20_vt_uncond: [689, 128] first4: -0.736081 1.603020 -0.233248 1.707090
+[Debug] dit_step20_vt: [689, 128] first4: -0.911731 1.532042 -0.594395 1.879439
+[Debug] dit_step20_xt: [689, 128] first4: -0.547359 2.020424 -0.462439 1.542643
+[Debug] dit_step21_vt_cond: [689, 128] first4: -0.731548 1.634565 -0.468722 1.758529
+[Debug] dit_step21_vt_uncond: [689, 128] first4: -0.649751 1.729658 -0.255300 1.685258
+[Debug] dit_step21_vt: [689, 128] first4: -0.788805 1.568000 -0.618118 1.809818
+[Debug] dit_step21_xt: [689, 128] first4: -0.573653 2.072690 -0.483043 1.602971
+[Debug] dit_step22_vt_cond: [689, 128] first4: -0.698780 1.811299 -0.463778 1.801114
+[Debug] dit_step22_vt_uncond: [689, 128] first4: -0.651929 1.881573 -0.365998 1.699879
+[Debug] dit_step22_vt: [689, 128] first4: -0.731576 1.762108 -0.532224 1.871978
+[Debug] dit_step22_xt: [689, 128] first4: -0.598039 2.131427 -0.500784 1.665370
+[Debug] dit_step23_vt_cond: [689, 128] first4: -0.671162 1.942481 -0.517307 1.763335
+[Debug] dit_step23_vt_uncond: [689, 128] first4: -0.618647 1.971185 -0.381399 1.661531
+[Debug] dit_step23_vt: [689, 128] first4: -0.707923 1.922388 -0.612443 1.834597
+[Debug] dit_step23_xt: [689, 128] first4: -0.621636 2.195507 -0.521199 1.726523
+[Debug] dit_step24_vt_cond: [689, 128] first4: -0.731492 2.038693 -0.554266 1.759919
+[Debug] dit_step24_vt_uncond: [689, 128] first4: -0.596467 2.073166 -0.390361 1.682766
+[Debug] dit_step24_vt: [689, 128] first4: -0.826009 2.014563 -0.668999 1.813926
+[Debug] dit_step24_xt: [689, 128] first4: -0.649170 2.262659 -0.543499 1.786987
+[Debug] dit_step25_vt_cond: [689, 128] first4: -0.668165 2.205301 -0.607180 1.780903
+[Debug] dit_step25_vt_uncond: [689, 128] first4: -0.561425 2.183182 -0.432441 1.729295
+[Debug] dit_step25_vt: [689, 128] first4: -0.742882 2.220785 -0.729498 1.817028
+[Debug] dit_step25_xt: [689, 128] first4: -0.673932 2.336685 -0.567815 1.847555
+[Debug] dit_step26_vt_cond: [689, 128] first4: -0.592792 2.350735 -0.569763 1.810312
+[Debug] dit_step26_vt_uncond: [689, 128] first4: -0.555142 2.308111 -0.538856 1.707366
+[Debug] dit_step26_vt: [689, 128] first4: -0.619146 2.380571 -0.591397 1.882374
+[Debug] dit_step26_xt: [689, 128] first4: -0.694571 2.416038 -0.587528 1.910301
+[Debug] dit_step27_vt_cond: [689, 128] first4: -0.551502 2.489485 -0.646134 1.823843
+[Debug] dit_step27_vt_uncond: [689, 128] first4: -0.517987 2.426792 -0.564753 1.730777
+[Debug] dit_step27_vt: [689, 128] first4: -0.574963 2.533370 -0.703101 1.888989
+[Debug] dit_step27_xt: [689, 128] first4: -0.713736 2.500483 -0.610965 1.973267
+[Debug] dit_step28_vt_cond: [689, 128] first4: -0.612787 2.573423 -0.725111 1.827590
+[Debug] dit_step28_vt_uncond: [689, 128] first4: -0.586450 2.494137 -0.734498 1.731031
+[Debug] dit_step28_vt: [689, 128] first4: -0.631224 2.628924 -0.718541 1.895181
+[Debug] dit_step28_xt: [689, 128] first4: -0.734777 2.588114 -0.634916 2.036440
+[Debug] dit_step29_vt_cond: [689, 128] first4: -0.630159 2.601351 -0.806841 1.746768
+[Debug] dit_step29_vt_uncond: [689, 128] first4: -0.622233 2.576492 -0.809995 1.741788
+[Debug] dit_step29_vt: [689, 128] first4: -0.635706 2.618752 -0.804634 1.750253
+[Debug] dit_step29_xt: [689, 128] first4: -0.755967 2.675406 -0.661738 2.094781
+[Debug] dit_x0: [689, 128] first4: -0.755967 2.675406 -0.661738 2.094781
 [Debug] window0_cond: [689, 2048] first4: -0.290057 -0.003712 -0.019914 -0.070771
-[Debug] window0_latent: [689, 128] first4: -0.766962 2.671328 -0.665120 2.104285
-[DiT] Window 1/1: T=689, 30 steps, 2175 ms (72.5 ms/step)
-[DiT] CFG=1.70, 1 windows, 2.2 s
+[Debug] window0_latent: [689, 128] first4: -0.755967 2.675406 -0.661738 2.094781
+[DiT] Window 1/1: T=689, 30 steps, 2367 ms (78.9 ms/step)
+[DiT] CFG=1.70, 1 windows, 2.4 s
 [VAE] Graph: 398 nodes, T_latent=689
 [VAE] Decoded: T_latent=689 -> T_audio=352768 (8.00s @ 44.1kHz)
-[Debug] vae_audio: [352768, 2] first4: -0.007934 -0.004738 -0.015082 0.001534
-[VAE] Decode: 1 windows -> 8.0s of audio, 85 ms
-[Done] 6.5 s total
+[Debug] vae_audio: [352768, 2] first4: 0.002068 -0.004974 -0.015524 0.001575
+[VAE] Decode: 1 windows -> 8.0s of audio, 86 ms
+[Done] 8.4 s total
+[Store] Unload VAE (103.4 MB)
+[Store] Unload DiT (1322.6 MB)
+[Store] Unload Cond (48.0 MB)
 [WAV] Wrote ggml-dit/output.wav: 352768 samples, 44100 Hz, stereo
 [Out] ggml-dit/output.wav
+[Out] ggml-dit/output.json
+Cannot initialize model with low cpu memory usage because `accelerate` was not found in the environment. Defaulting to `low_cpu_mem_usage=False`. It is strongly recommended to install `accelerate` for faster and less memory-intense model loading. You can do so with: 
+```
+pip install accelerate
+```
+.
+Cannot initialize model with low cpu memory usage because `accelerate` was not found in the environment. Defaulting to `low_cpu_mem_usage=False`. It is strongly recommended to install `accelerate` for faster and less memory-intense model loading. You can do so with: 
+```
+pip install accelerate
+```
+.
 [Request] Loaded request0.json
 [DiT] steps=30, CFG=1.7 | mm3-dit-Q4_K_M.gguf
 [GGML] Running MiniMax-Music3-transformer-Q4_K_M.gguf...
@@ -204,46 +224,44 @@ load_backend: loaded CPU backend from /mnt/workspace/git/minimaxmusic.cpp/build/
 [Python] Decoding audio...
 [Python] Done, 104 dump files
 [DiT] Cosine similarities GGML vs Python
-  stage                          ggml vs python
-  noise                                1.000000
-  temb_t                               0.999983
-  hidden_after_preprocess              1.000000
-  hidden_after_proj_in                 0.999028
-  layer0_sa_output                     0.999787
-  hidden_after_layer0                  0.999828
-  hidden_after_layer6                  0.999908
-  hidden_after_layer12                 0.999857
-  hidden_after_layer18                 0.999840
-  hidden_after_layer35                 0.999471
-  dit_step0_vt_cond                    0.996596
-  dit_step0_vt_uncond                  0.996416
-  dit_step0_vt                         0.996351
-  dit_step0_xt                         0.999988
-  dit_step5_vt_cond                    0.991013
-  dit_step5_vt                         0.988479
-  dit_step5_xt                         0.999199
-  dit_step10_vt_cond                   0.990090
-  dit_step10_vt                        0.988362
-  dit_step10_xt                        0.996957
-  dit_step15_vt_cond                   0.988784
-  dit_step15_vt                        0.987311
-  dit_step15_xt                        0.994791
-  dit_step20_vt_cond                   0.987126
-  dit_step20_vt                        0.985887
-  dit_step20_xt                        0.993374
-  dit_step25_vt_cond                   0.986582
-  dit_step25_vt                        0.985629
-  dit_step25_xt                        0.992472
-  dit_step29_vt_cond                   0.987290
-  dit_step29_vt                        0.986571
-  dit_x0                               0.992033
-  vae_audio                            0.977999
-  vae_audio (STFT cosine)              0.988666
+noise: ggml vs python 1.000000
+temb_t: ggml vs python 0.999983
+hidden_after_preprocess: ggml vs python 1.000000
+hidden_after_proj_in: ggml vs python 0.999028
+layer0_sa_output: ggml vs python 0.999788
+hidden_after_layer0: ggml vs python 0.999828
+hidden_after_layer6: ggml vs python 0.999909
+hidden_after_layer12: ggml vs python 0.999858
+hidden_after_layer18: ggml vs python 0.999841
+hidden_after_layer35: ggml vs python 0.999470
+dit_step0_vt_cond: ggml vs python 0.996623
+dit_step0_vt_uncond: ggml vs python 0.996436
+dit_step0_vt: ggml vs python 0.996399
+dit_step0_xt: ggml vs python 0.999989
+dit_step5_vt_cond: ggml vs python 0.992965
+dit_step5_vt: ggml vs python 0.990210
+dit_step5_xt: ggml vs python 0.999360
+dit_step10_vt_cond: ggml vs python 0.991517
+dit_step10_vt: ggml vs python 0.989683
+dit_step10_xt: ggml vs python 0.997531
+dit_step15_vt_cond: ggml vs python 0.990118
+dit_step15_vt: ggml vs python 0.988631
+dit_step15_xt: ggml vs python 0.995688
+dit_step20_vt_cond: ggml vs python 0.988399
+dit_step20_vt: ggml vs python 0.987134
+dit_step20_xt: ggml vs python 0.994425
+dit_step25_vt_cond: ggml vs python 0.987891
+dit_step25_vt: ggml vs python 0.986981
+dit_step25_xt: ggml vs python 0.993588
+dit_step29_vt_cond: ggml vs python 0.988485
+dit_step29_vt: ggml vs python 0.987778
+dit_x0: ggml vs python 0.993164
+vae_audio: ggml vs python 0.978284
+vae_audio (STFT cosine): ggml vs python 0.988605
 [DiT] Error growth GGML vs Python
-  stage                         cos    max_err   mean_err     mean_A      std_A     mean_B      std_B
-  dit_step0_xt             0.999988   0.024528   0.003599  -0.001084   0.965298  -0.002135   0.965041
-  dit_step5_xt             0.999199   0.743604   0.024606   0.004672   0.884705   0.002533   0.884593
-  dit_step10_xt            0.996957   1.642316   0.051406   0.010957   0.946820   0.007973   0.950289
-  dit_step15_xt            0.994791   2.481050   0.081113   0.017619   1.124761   0.013735   1.132820
-  dit_step20_xt            0.993374   3.296899   0.113134   0.024487   1.373399   0.019518   1.385859
-  dit_step25_xt            0.992472   4.133590   0.147343   0.031289   1.661190   0.025057   1.677655
+dit_step0_xt: cos 0.999989, max_err 0.028576, mean_err 0.003582, mean_A -0.001110, std_A 0.965307, mean_B -0.002135, std_B 0.965041
+dit_step5_xt: cos 0.999360, max_err 0.362212, mean_err 0.023928, mean_A 0.004516, std_A 0.884696, mean_B 0.002533, std_B 0.884593
+dit_step10_xt: cos 0.997531, max_err 0.759452, mean_err 0.050026, mean_A 0.010681, std_A 0.946738, mean_B 0.007973, std_B 0.950289
+dit_step15_xt: cos 0.995688, max_err 1.160728, mean_err 0.079050, mean_A 0.017418, std_A 1.124396, mean_B 0.013735, std_B 1.132820
+dit_step20_xt: cos 0.994425, max_err 1.559546, mean_err 0.110387, mean_A 0.024243, std_A 1.372876, mean_B 0.019518, std_B 1.385859
+dit_step25_xt: cos 0.993588, max_err 1.970941, mean_err 0.143886, mean_A 0.031048, std_A 1.660503, mean_B 0.025057, std_B 1.677655

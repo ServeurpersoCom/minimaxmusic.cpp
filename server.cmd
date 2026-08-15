@@ -9,6 +9,7 @@ rem set GGML_BACKEND=Vulkan0
 mm-server.exe ^
     --host 0.0.0.0 ^
     --port 8086 ^
-    --models .\models
+    --models .\models ^
+    --max-batch 1
 
 pause

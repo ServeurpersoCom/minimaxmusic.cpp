@@ -169,12 +169,12 @@
 		} catch {}
 	}
 
-	function clearMetadata() {
-		clearSection(app.request, 'metadata');
+	function clearLmConfiguration() {
+		clearSection(app.request, 'lm');
 	}
 
 	function clearAdvancedLm() {
-		clearSection(app.request, 'lm');
+		clearSection(app.request, 'lm_advanced');
 	}
 
 	function clearFlowMatching() {
@@ -294,14 +294,14 @@
 		bind:value={app.request.lyrics}
 	></textarea>
 
-	<div class="section-title metadata-header">
-		Metadata
+	<div class="section-title section-header">
+		LM configuration
 		<button
 			type="button"
 			class="clear-btn"
-			title="Clear metadata"
-			onclick={clearMetadata}
-			aria-label="Clear metadata"
+			title="Clear LM configuration"
+			onclick={clearLmConfiguration}
+			aria-label="Clear LM configuration"
 		>
 			<X size={20} />
 		</button>
@@ -312,6 +312,20 @@
 				type="text"
 				placeholder={ph(d?.duration)}
 				bind:value={app.request.duration}
+			/></label
+		>
+		<label
+			>LM batch <input
+				type="text"
+				placeholder={ph(d?.lm_batch_size)}
+				bind:value={app.request.lm_batch_size}
+			/></label
+		>
+		<label
+			>LM seed <input
+				type="text"
+				placeholder={ph(d?.lm_seed)}
+				bind:value={app.request.lm_seed}
 			/></label
 		>
 	</div>
@@ -341,20 +355,6 @@
 						type="text"
 						placeholder={ph(d?.lm_top_k)}
 						bind:value={app.request.lm_top_k}
-					/></label
-				>
-				<label
-					>LM batch <input
-						type="text"
-						placeholder={ph(d?.lm_batch_size)}
-						bind:value={app.request.lm_batch_size}
-					/></label
-				>
-				<label
-					>Seed <input
-						type="text"
-						placeholder={ph(d?.lm_seed)}
-						bind:value={app.request.lm_seed}
 					/></label
 				>
 			</div>
@@ -389,7 +389,7 @@
 					/></label
 				>
 				<label
-					>DiT batch <input
+					>Batch <input
 						type="text"
 						placeholder={ph(d?.synth_batch_size)}
 						bind:value={app.request.synth_batch_size}
@@ -429,22 +429,20 @@
 						bind:value={app.request.mp3_bitrate}
 					/></label
 				>
+				<label
+					>Format <select
+						bind:value={app.format}
+						title="Output audio format. WAV32 outputs raw IEEE float without normalization."
+					>
+						<option value="mp3">MP3</option>
+						<option value="wav16">WAV16</option>
+						<option value="wav24">WAV24</option>
+						<option value="wav32">WAV32</option>
+					</select></label
+				>
 			</div>
 		</div>
 	</details>
-
-	<div class="format-row">
-		<span class="model-label">Format</span>
-		<select
-			bind:value={app.format}
-			title="Output audio format. WAV32 outputs raw IEEE float without normalization."
-		>
-			<option value="mp3">MP3</option>
-			<option value="wav16">WAV16</option>
-			<option value="wav24">WAV24</option>
-			<option value="wav32">WAV32</option>
-		</select>
-	</div>
 
 	<div class="action-row">
 		<button
@@ -513,7 +511,7 @@
 		font-weight: 600;
 		padding: 0.4rem 0 0;
 	}
-	.metadata-header {
+	.section-header {
 		display: flex;
 		align-items: center;
 		justify-content: space-between;
@@ -590,15 +588,6 @@
 		min-width: 2.6rem;
 	}
 	.model-select {
-		flex: 1;
-		min-width: 0;
-	}
-	.format-row {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-	}
-	.format-row select {
 		flex: 1;
 		min-width: 0;
 	}

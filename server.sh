@@ -9,4 +9,5 @@ set -eu
 ./build/mm-server \
     --host 0.0.0.0 \
     --port 8086 \
-    --models ./models
+    --models ./models \
+    --max-batch 1

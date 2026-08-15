@@ -6,7 +6,7 @@
 
 import type { MM3Request } from './types.js';
 
-export type FieldSection = 'content' | 'metadata' | 'lm' | 'flow' | 'post' | 'routing';
+export type FieldSection = 'content' | 'lm' | 'lm_advanced' | 'flow' | 'post' | 'routing';
 
 interface FieldDef {
 	key: keyof MM3Request;
@@ -19,14 +19,14 @@ export const FIELDS: readonly FieldDef[] = [
 	{ key: 'caption', section: 'content', type: 'str' },
 	{ key: 'lyrics', section: 'content', type: 'str' },
 
-	// metadata: song level settings
-	{ key: 'duration', section: 'metadata', type: 'num' },
-
-	// lm: autoregressive sampling settings
-	{ key: 'lm_cfg', section: 'lm', type: 'num' },
-	{ key: 'lm_top_k', section: 'lm', type: 'num' },
+	// lm: autoregressive generation settings
+	{ key: 'duration', section: 'lm', type: 'num' },
 	{ key: 'lm_batch_size', section: 'lm', type: 'num' },
 	{ key: 'lm_seed', section: 'lm', type: 'num' },
+
+	// lm_advanced: autoregressive sampling settings
+	{ key: 'lm_cfg', section: 'lm_advanced', type: 'num' },
+	{ key: 'lm_top_k', section: 'lm_advanced', type: 'num' },
 
 	// flow: flow matching settings
 	{ key: 'steps', section: 'flow', type: 'num' },

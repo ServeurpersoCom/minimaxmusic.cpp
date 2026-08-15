@@ -622,7 +622,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         int                      M = (int) (tracks.size() / codes.size());
         std::vector<std::string> requests(parts.size());
         for (size_t i = 0; i < parts.size(); i++) {
-            requests[i] = request_replay_json(r, codes[i / M], (int) (i % M));
+            requests[i] = request_replay_json(r, codes[i / M], (int) (i / M), (int) (i % M));
         }
         job->result_body = multipart_build_tracks(requests, parts, mime);
         job->result_mime = MULTIPART_MIME;

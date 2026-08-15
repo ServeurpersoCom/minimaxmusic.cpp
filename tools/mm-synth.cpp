@@ -197,7 +197,7 @@ int main(int argc, char ** argv) {
 
         size_t      pdot      = path.rfind('.');
         std::string json_path = (pdot != std::string::npos ? path.substr(0, pdot) : path) + ".json";
-        std::string json      = request_replay_json(req, codes[i / M], (int) (i % M));
+        std::string json      = request_replay_json(req, codes[i / M], (int) (i / M), (int) (i % M));
         FILE *      jf        = fopen(json_path.c_str(), "wb");
         if (!jf) {
             fprintf(stderr, "[Out] FATAL: cannot write %s\n", json_path.c_str());

@@ -200,19 +200,15 @@ int main(int argc, char ** argv) {
     }
 
     // One replayable request per song: the input request with its song's
-    // codes and traceable per-song seed. song.json -> song0.json ...
+    // codes and consumed seed. song.json -> song0.json ...
     for (size_t i = 0; i < codes.size(); i++) {
-        MM3Request out    = req;
-        out.audio_codes   = codes[i];
-        out.lm_seed       = req.lm_seed + (int64_t) i;
-        out.lm_batch_size = 1;
-        std::string path  = out_path;
+        std::string path = out_path;
         if (codes.size() > 1) {
             size_t dot = out_path.rfind('.');
             path       = dot != std::string::npos ? out_path.substr(0, dot) + std::to_string(i) + out_path.substr(dot) :
                                                     out_path + std::to_string(i);
         }
-        if (!write_file(path.c_str(), request_to_json(&out) + "\n")) {
+        if (!write_file(path.c_str(), request_replay_json(req, codes[i], (int) i, 0) + "\n")) {
             return 1;
         }
         fprintf(stderr, "[Out] %s\n", path.c_str());

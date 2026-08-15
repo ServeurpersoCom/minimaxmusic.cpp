@@ -196,9 +196,10 @@ void request_resolve_lm_seed(MM3Request * r) {
     }
 }
 
-std::string request_replay_json(const MM3Request & base, const std::string & codes, int variation) {
+std::string request_replay_json(const MM3Request & base, const std::string & codes, int song, int variation) {
     MM3Request r       = base;
     r.audio_codes      = codes;
+    r.lm_seed          = base.lm_seed + song;
     r.seed             = base.seed + variation;
     r.lm_batch_size    = 1;
     r.synth_batch_size = 1;

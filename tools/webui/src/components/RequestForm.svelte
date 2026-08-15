@@ -359,6 +359,14 @@
 					/></label
 				>
 			</div>
+			<label
+				>Audio codes
+				<textarea
+					rows="4"
+					placeholder="Filled when reusing a rendered song. Do not edit unless you know what you are doing."
+					bind:value={app.request.audio_codes}
+				></textarea>
+			</label>
 		</div>
 	</details>
 

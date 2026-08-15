@@ -11,6 +11,7 @@ export interface MM3Request {
 	lm_top_k?: number;
 	lm_batch_size?: number;
 	synth_batch_size?: number;
+	audio_codes?: string;
 	dit_cfg?: number;
 	peak_clip?: number;
 	output_format?: string;

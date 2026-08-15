@@ -27,6 +27,7 @@ export const FIELDS: readonly FieldDef[] = [
 	// lm_advanced: autoregressive sampling settings
 	{ key: 'lm_cfg', section: 'lm_advanced', type: 'num' },
 	{ key: 'lm_top_k', section: 'lm_advanced', type: 'num' },
+	{ key: 'audio_codes', section: 'lm_advanced', type: 'str' },
 
 	// flow: flow matching settings
 	{ key: 'steps', section: 'flow', type: 'num' },

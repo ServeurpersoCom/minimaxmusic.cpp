@@ -72,6 +72,45 @@ static int mm3_cfg_sample(const float *            cond,
     return ranked[k - 1].second;
 }
 
+// Depth acoustic CFG on logits: guided = uncond + (cond - uncond) * scale
+// over the full codebook, then the top k of the guided logits is sampled.
+// The semantic head restricts to the conditional top k instead.
+static int mm3_cfg_sample_guided(const float *     cond,
+                                 const float *     uncond,
+                                 int               n,
+                                 float             cfg,
+                                 int               top_k,
+                                 std::mt19937_64 & rng) {
+    std::vector<std::pair<float, int>> ranked;
+    ranked.reserve(n);
+    for (int id = 0; id < n; id++) {
+        ranked.push_back({ uncond[id] + (cond[id] - uncond[id]) * cfg, id });
+    }
+    int k = top_k < n ? top_k : n;
+    std::partial_sort(
+        ranked.begin(), ranked.begin() + k, ranked.end(),
+        [](const std::pair<float, int> & a, const std::pair<float, int> & b) { return a.first > b.first; });
+    ranked.resize(k);
+
+    std::vector<float> probs(k);
+    float              mx  = ranked[0].first;
+    float              sum = 0;
+    for (int i = 0; i < k; i++) {
+        probs[i] = expf(ranked[i].first - mx);
+        sum += probs[i];
+    }
+    std::uniform_real_distribution<float> uni(0.0f, 1.0f);
+    float                                 r   = uni(rng) * sum;
+    float                                 acc = 0;
+    for (int i = 0; i < k; i++) {
+        acc += probs[i];
+        if (r <= acc) {
+            return ranked[i].second;
+        }
+    }
+    return ranked[k - 1].second;
+}
+
 // Reads one embedding table row [H] from the LM GPU tensor as F32,
 // dequantizing through the ggml type traits (BF16, Q8_0, K-quants).
 static void mm3_lm_embed_row(Qwen3LM * lm, int token_id, float * out) {
@@ -308,10 +347,6 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
         allowed.push_back(MM3_AUDIO_CODE_OFFSET + i);
     }
     allowed.push_back(MM3_AUDIO_END);
-    std::vector<int> depth_allowed(DepthDecoder::VOCAB);
-    for (int i = 0; i < DepthDecoder::VOCAB; i++) {
-        depth_allowed[i] = i;
-    }
 
     // Autoregressive stage. KV set blocks: [cond 0..N-1, uncond N..2N-1].
     // Song i samples with its own stream seeded lm_seed + i, so a song's
@@ -439,8 +474,8 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
                     memcpy(collectedN.data() + ((size_t) i * NC + cb - 1) * H, depth_hid.data() + (size_t) (S - 1) * H,
                            (size_t) H * sizeof(float));
                     depth->forward(seq1.data(), S, depth_hid.data(), depth_logits1.data());
-                    int code = mm3_cfg_sample(depth_logits0.data(), depth_logits1.data(), depth_allowed, req.lm_cfg,
-                                              req.lm_top_k, rng[i]);
+                    int code = mm3_cfg_sample_guided(depth_logits0.data(), depth_logits1.data(), DepthDecoder::VOCAB,
+                                                     req.lm_cfg, req.lm_top_k, rng[i]);
                     codesN[(size_t) i * NC + cb - 1] = code;
                     if (cb < DepthDecoder::CODEBOOKS - 1) {
                         const float * row = depth->audio_embedding_row(cb, code);

@@ -345,11 +345,9 @@ inline bool depth_build_fused(DepthDecoder * m, DepthDecoder::FusedSlot & slot, 
             struct ggml_tensor * cond   = ggml_view_1d(ctx, out.logits, V, (size_t) i * out.logits->nb[1]);
             struct ggml_tensor * uncond = ggml_view_1d(ctx, out.logits, V, (size_t) (N + i) * out.logits->nb[1]);
 
-            struct ggml_tensor * idxk     = ggml_cont(ctx, ggml_argsort_top_k(ctx, cond, k));
-            struct ggml_tensor * cond_k   = gather(cond, idxk);
-            struct ggml_tensor * uncond_k = gather(uncond, idxk);
-            struct ggml_tensor * guided =
-                ggml_add(ctx, uncond_k, ggml_scale(ctx, ggml_sub(ctx, cond_k, uncond_k), cfg));
+            struct ggml_tensor * guided_full = ggml_add(ctx, uncond, ggml_scale(ctx, ggml_sub(ctx, cond, uncond), cfg));
+            struct ggml_tensor * idxk        = ggml_cont(ctx, ggml_argsort_top_k(ctx, guided_full, k));
+            struct ggml_tensor * guided      = gather(guided_full, idxk);
 
             struct ggml_tensor * cdf = ggml_cumsum(ctx, ggml_soft_max(ctx, guided));
             struct ggml_tensor * u   = ggml_view_1d(ctx, slot.rand, 1, (size_t) (i * NC + cb - 1) * sizeof(float));

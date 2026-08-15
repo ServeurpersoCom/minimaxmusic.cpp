@@ -82,13 +82,20 @@ checkpoint subfolders:
 | MiniMax-Music3-rvq_depth_decoder-BF16.gguf | RVQ depth decoder 0.6B | BF16 | 1.3 GB |
 | MiniMax-Music3-condition_encoder-F32.gguf | condition encoder | F32 | 101 MB |
 | MiniMax-Music3-transformer-F32.gguf | flow matching DiT 2.4B | F32 | 9.7 GB |
-| MiniMax-Music3-vocoder-F32.gguf | flow VAE decoder | F32 | 217 MB |
+| MiniMax-Music3-vocoder-F32.gguf | flow VAE encoder + decoder | F32 | 306 MB |
 
 The converter always produces the native dtype of the safetensors source,
 byte for byte: BF16 tensors pass through untouched, F32 tensors stay F32.
 No dtype exists in a GGUF that does not exist in the checkpoint. The only
-transformation is the vocoder weight norm folding (`w = g * v / ||v||`,
+transformation is the VAE weight norm folding (`w = g * v / ||v||`,
 axis 0), which is the inference form of the same weights.
+
+The vocoder GGUF carries a second source: the `encoder.*` tensors come
+from the `dav.pth` training checkpoint at the repository root, whose
+decoder half is bit-identical to the published `vocoder/` subfolder, so
+its encoder is the exact companion of the decoder. Only the encoder and
+the posterior mean projection are extracted; the training-side flow and
+variance projection stay in `dav.pth`.
 
 Quantized variants are generated from the natives:
 
@@ -244,12 +251,19 @@ transformer_blocks.N.{norm1, attn.to_{q,k,v,out}, norm2, ff_in, ff_out}
 proj_out, postprocess_conv
 ```
 
-### Flow VAE decoder (`vocoder/`, MiniMaxMusic3Vocoder)
+### Flow VAE (`vocoder/` + `dav.pth`, MiniMaxMusic3Vocoder)
 
-DAC style upsampling stack. All convs are weight normalized in the
-checkpoint (`weight_g` / `weight_v`), folded at conversion. The snake
-activation uses the alpha parameter directly:
+DAC style stack. All convs are weight normalized in the checkpoint
+(`weight_g` / `weight_v`), folded at conversion. The snake activation
+uses the alpha parameter directly:
 `y = x + sin^2(a * x) / (a + 1e-9)`.
+
+The encoder (`src/vae-enc.h`, used by `neural-codec --encode`) is the
+mirror: per side, conv_in (1 -> 64, k=7), 4 blocks of 3 res_units
+(dilations 1, 3, 9) then snake and a strided conv (strides 2/4/8/8,
+k = 2s, pad s/2), snake_out, conv_out (1024 -> 1024, k=3), and the
+posterior mean projection (1024 -> 64, k=1). Downsample 512x, the exact
+inverse of the decoder hop.
 
 ```
 dec_in_proj           conv1d 64 -> 1024, k=1 (not weight normalized)
@@ -679,23 +693,26 @@ flag: Ctrl+C lands in about 100 ms even mid-generation.
 
 ## neural-codec reference
 
-GGML-native decoder for the flow VAE latent space. The published MiniMax
-Music 3 checkpoint ships a decoder only (`vocoder/`), so this codec has no
-encode mode: it plays back latent files without rerunning the pipeline.
+GGML-native codec for the flow VAE latent space. The decoder weights come
+from the published `vocoder/`; the encoder comes from the `dav.pth`
+training checkpoint, whose decoder half is bit-identical to the published
+vocoder, so the encoder is the exact companion of the decoder. Both live
+in the vocoder GGUF (`encoder.*` tensors). The encode is deterministic:
+the posterior mean, no sampling and no flow.
 
 ```
-Usage: ./neural-codec --vae <gguf> --decode -i <input> [-o <output>] [options]
+Usage: ./neural-codec --vae <gguf> --encode|--decode -i <input> [-o <output>] [options]
 
 Required:
   --vae <path>            VAE GGUF file
-  --decode                Decode latent to audio
-  -i <path>               Input latent (.vae)
+  --encode | --decode     Encode audio to latent, or decode latent to audio
+  -i <path>               Input (WAV/MP3 for encode, .vae for decode)
 
 Output:
   -o <path>               Output file (auto-named if omitted)
   --format <fmt>          mp3, wav16, wav24, wav32 (default: wav16)
 
-Output naming: song.vae -> song.wav
+Output naming: song.wav -> song.vae, song.vae -> song.wav
 
 Memory control:
   --vae-chunk <N>         Latent frames per tile (default: 689)
@@ -712,11 +729,18 @@ shape); stripping the header yields a valid `.vae`.
 
 Output is never normalized: the codec reproduces the decoder output
 exactly. A single-tile decode is bit-identical to the audio the pipeline
-emits for the same latent window. Long latents are decoded in tiles with
+emits for the same latent window. Long signals run in tiles with
 symmetric overlap cropped on both sides; the overlap (86 latents = 44032
-samples) sits far beyond the decoder's receptive field, so tiling only
-introduces backend-level GEMM epsilon (max abs error ~4e-4 measured
-against a single-tile decode on CUDA).
+samples) sits far beyond the receptive field, so tiling only introduces
+backend-level GEMM epsilon (max abs error ~4e-4 measured against a
+single-tile decode on CUDA).
+
+The encode input resamples to 44.1 kHz when needed and right-pads with
+silence to whole latent frames. Roundtrip fidelity (CUDA, F32):
+encode(decode(z)) recovers a pipeline latent at 0.993 cosine with the
+variance preserved, and audio -> latent -> audio holds 0.994 STFT
+magnitude cosine on an official demo track; the residual is the
+intrinsic VAE reconstruction loss.
 
 ```bash
 # decode a dumped window latent

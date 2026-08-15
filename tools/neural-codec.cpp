@@ -1,22 +1,26 @@
-// neural-codec.cpp: neural audio codec (flow VAE decoder)
+// neural-codec.cpp: neural audio codec (flow VAE encoder + decoder)
 //
+// encode: 44.1 kHz stereo audio (WAV or MP3) -> latent file (.vae)
 // decode: latent file (.vae) -> 44.1 kHz stereo audio (WAV or MP3)
 //
 // Latent format:
 //   .vae: flat [T, 128] f32 frame-major, no header.
 //     T = file_size / 512. 86.13 Hz, ~353 kbit/s.
 //
-// The published MiniMax Music 3 checkpoint ships a decoder only
-// (vocoder/), so this codec has no encode mode.
+// The decoder weights come from the published vocoder; the encoder is its
+// bit-identical training companion (dav.pth), both in the vocoder GGUF.
+// The encode is deterministic: the posterior mean, no sampling.
 //
-// Long latents are decoded in tiles with symmetric overlap: each tile is
-// decoded with context on both sides and the overlap samples are cropped,
-// so the seams fall far beyond the decoder's receptive field.
+// Long signals run in tiles with symmetric overlap: each tile is
+// processed with context on both sides and the overlap is cropped, so
+// the seams fall far beyond the receptive field.
 //
 // Usage:
+//   neural-codec --vae model.gguf --encode -i song.wav -o song.vae
 //   neural-codec --vae model.gguf --decode -i song.vae -o song.wav
 
 #include "audio-io.h"
+#include "vae-enc.h"
 #include "vae.h"
 #include "version.h"
 
@@ -32,18 +36,23 @@ static const int HOP       = 512;
 static void print_usage(const char * prog) {
     fprintf(stderr, "minimaxmusic.cpp %s\n\n", MM3_VERSION);
     fprintf(stderr,
-            "Usage: %s --vae <gguf> --decode -i <input> [-o <output>] [options]\n\n"
+            "Usage: %s --vae <gguf> --encode|--decode -i <input> [-o <output>] [options]\n"
+            "\n"
             "Required:\n"
             "  --vae <path>            VAE GGUF file\n"
-            "  --decode                Decode latent to audio\n"
-            "  -i <path>               Input latent (.vae)\n\n"
+            "  --encode | --decode     Encode audio to latent, or decode latent to audio\n"
+            "  -i <path>               Input (WAV/MP3 for encode, .vae for decode)\n"
+            "\n"
             "Output:\n"
             "  -o <path>               Output file (auto-named if omitted)\n"
-            "  --format <fmt>          mp3, wav16, wav24, wav32 (default: wav16)\n\n"
-            "Output naming: song.vae -> song.wav\n\n"
+            "  --format <fmt>          mp3, wav16, wav24, wav32 (default: wav16)\n"
+            "\n"
+            "Output naming: song.wav -> song.vae, song.vae -> song.wav\n"
+            "\n"
             "Memory control:\n"
             "  --vae-chunk <N>         Latent frames per tile (default: 689)\n"
-            "  --vae-overlap <N>       Overlap frames per side (default: 86)\n\n"
+            "  --vae-overlap <N>       Overlap frames per side (default: 86)\n"
+            "\n"
             "Latent format:\n"
             "  .vae: flat [T, 128] f32, no header. 86.13 Hz, ~353 kbit/s.\n",
             prog);
@@ -120,6 +129,8 @@ int main(int argc, char ** argv) {
             overlap = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--decode") == 0) {
             mode = 1;
+        } else if (strcmp(argv[i], "--encode") == 0) {
+            mode = 0;
         } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
@@ -149,13 +160,103 @@ int main(int argc, char ** argv) {
 
     std::string out_str;
     if (!output_path) {
-        out_str     = auto_output(input_path, is_mp3 ? ".mp3" : ".wav");
+        out_str     = auto_output(input_path, mode == 0 ? ".vae" : (is_mp3 ? ".mp3" : ".wav"));
         output_path = out_str.c_str();
     }
 
-    fprintf(stderr, "\n[VAE] Mode: decode\n");
+    fprintf(stderr, "\n[VAE] Mode: %s\n", mode == 0 ? "encode" : "decode");
     fprintf(stderr, "[VAE] Input: %s\n", input_path);
     fprintf(stderr, "[VAE] Output: %s\n\n", output_path);
+
+    if (mode == 0) {
+        // Encode: audio -> .vae. Deterministic (posterior mean).
+        int     T_audio = 0, sr = 0;
+        float * planar = audio_read(input_path, &T_audio, &sr);
+        if (!planar) {
+            return 1;
+        }
+        if (sr != 44100) {
+            fprintf(stderr, "[VAE] Resampling %d Hz -> 44100 Hz\n", sr);
+            int     T_rs  = 0;
+            float * left  = audio_resample(planar, T_audio, sr, 44100, 1, &T_rs);
+            float * right = audio_resample(planar + T_audio, T_audio, sr, 44100, 1, &T_rs);
+            free(planar);
+            if (!left || !right) {
+                fprintf(stderr, "[VAE] FATAL: resampling failed\n");
+                return 1;
+            }
+            planar = (float *) malloc((size_t) T_rs * 2 * sizeof(float));
+            memcpy(planar, left, (size_t) T_rs * sizeof(float));
+            memcpy(planar + T_rs, right, (size_t) T_rs * sizeof(float));
+            free(left);
+            free(right);
+            T_audio = T_rs;
+        }
+
+        // Right pad with silence to whole latent frames
+        int T_latent = (T_audio + HOP - 1) / HOP;
+        int T_padded = T_latent * HOP;
+
+        VAEEncoder enc = {};
+        if (!enc.load(vae_path)) {
+            free(planar);
+            return 1;
+        }
+
+        // Tiled encode: [start - overlap, end + overlap] clipped to the
+        // signal, the encoded overlap frames cropped from each side.
+        std::vector<float> out((size_t) T_latent * LATENT_CH);
+        int                n_tiles = (T_latent + chunk_size - 1) / chunk_size;
+        fprintf(stderr, "[VAE] Encoding %d samples (%.2fs), %d tile(s)...\n", T_audio, (float) T_audio / 44100.0f,
+                n_tiles);
+        for (int start = 0; start < T_latent; start += chunk_size) {
+            int end = start + chunk_size < T_latent ? start + chunk_size : T_latent;
+            int lo  = start - overlap > 0 ? start - overlap : 0;
+            int hi  = end + overlap < T_latent ? end + overlap : T_latent;
+            int T_t = hi - lo;
+
+            // padded planar window -> interleaved [T_t * HOP, 2]
+            std::vector<float> tile((size_t) T_t * HOP * 2, 0.0f);
+            for (int t = 0; t < T_t * HOP; t++) {
+                int s = lo * HOP + t;
+                if (s < T_audio) {
+                    tile[(size_t) t * 2 + 0] = planar[s];
+                    tile[(size_t) t * 2 + 1] = planar[(size_t) T_audio + s];
+                }
+            }
+
+            std::vector<float> lat;  // channel-major [128, T_t]
+            int                T_out = 0;
+            if (!enc.encode(tile.data(), T_t * HOP, lat, T_out)) {
+                free(planar);
+                enc.free();
+                return 1;
+            }
+
+            // crop the overlap, transpose to the frame-major file layout
+            for (int t = start; t < end; t++) {
+                for (int c = 0; c < LATENT_CH; c++) {
+                    out[(size_t) t * LATENT_CH + c] = lat[(size_t) c * T_t + (t - lo)];
+                }
+            }
+        }
+        free(planar);
+        enc.free();
+
+        FILE * f = fopen(output_path, "wb");
+        if (!f || fwrite(out.data(), 1, out.size() * sizeof(float), f) != out.size() * sizeof(float)) {
+            fprintf(stderr, "[VAE] FATAL: failed to write %s\n", output_path);
+            if (f) {
+                fclose(f);
+            }
+            return 1;
+        }
+        fclose(f);
+        fprintf(stderr, "[VAE] Output: %s (%d frames, %.2fs, %.1f KB)\n", output_path, T_latent,
+                (float) T_padded / 44100.0f, (float) (out.size() * sizeof(float)) / 1024.0f);
+        fprintf(stderr, "[VAE] Done.\n");
+        return 0;
+    }
 
     int     T_latent = 0;
     float * latent   = read_latent(input_path, &T_latent);

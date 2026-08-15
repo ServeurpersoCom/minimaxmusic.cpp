@@ -17,7 +17,7 @@ https://huggingface.co/Serveurperso/MiniMax-Music3-GGUF/tree/main
 | Depth decoder | MiniMax-Music3-rvq_depth_decoder-Q8_0.gguf | 690 MB |
 | DiT | MiniMax-Music3-transformer-Q8_0.gguf | 2.6 GB |
 | Condition encoder | MiniMax-Music3-condition_encoder-F32.gguf | 101 MB |
-| VAE | MiniMax-Music3-vocoder-F32.gguf | 217 MB |
+| VAE | MiniMax-Music3-vocoder-F32.gguf | 306 MB |
 
 The LM also ships in BF16 / Q6_K / Q5_K_M, the DiT in F32 / Q6_K /
 Q5_K_M / Q4_K_M, the depth decoder in BF16. The full quantized combo
@@ -80,7 +80,7 @@ pip install hf gguf numpy
 | MiniMax-Music3-rvq_depth_decoder-BF16.gguf | RVQ depth decoder 0.6B | 1.3 GB |
 | MiniMax-Music3-condition_encoder-F32.gguf | condition encoder | 101 MB |
 | MiniMax-Music3-transformer-F32.gguf | flow matching DiT 2.4B | 9.7 GB |
-| MiniMax-Music3-vocoder-F32.gguf | flow VAE decoder | 217 MB |
+| MiniMax-Music3-vocoder-F32.gguf | flow VAE encoder + decoder | 306 MB |
 
 ## Run
 
@@ -178,7 +178,7 @@ same replayable request JSONs without synthesizing anything.
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full JSON
-reference and the `neural-codec` (flow VAE latent playback), `mp3-codec`
+reference and the `neural-codec` (flow VAE audio codec, encode and decode), `mp3-codec`
 and `quantize` tools.
 
 </details>

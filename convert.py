@@ -9,7 +9,9 @@
 #   rvq_depth_decoder/ -> MiniMax-Music3-rvq_depth_decoder-BF16.gguf (0.6B intra frame transformer)
 #   condition_encoder/ -> MiniMax-Music3-condition_encoder-F32.gguf (hidden state fusion)
 #   transformer/       -> MiniMax-Music3-transformer-F32.gguf       (2.4B flow matching DiT)
-#   vocoder/           -> MiniMax-Music3-vocoder-F32.gguf           (flow VAE decoder, weight
+#   vocoder/ + dav.pth -> MiniMax-Music3-vocoder-F32.gguf           (flow VAE decoder + the
+#                                                                    encoder of the dav.pth
+#                                                                    training checkpoint, weight
 #                                                                    norm folded: w = g*v/||v||)
 
 import os
@@ -91,14 +93,91 @@ def fold_weight_norm(tensors):
             out[name] = a
     return out
 
+# PyTorch checkpoint reader (pure python: zip + pickle with stub classes)
+PTH_DTYPES = {"FloatStorage": np.float32, "HalfStorage": np.float16, "DoubleStorage": np.float64}
+
+def load_pth_tensors(path):
+    """Load a torch .pth state dict as float32 numpy arrays, no torch needed."""
+    import zipfile, pickle, io, importlib
+
+    z = zipfile.ZipFile(path)
+    pkl = [n for n in z.namelist() if n.endswith("data.pkl")][0]
+    root = pkl.rsplit("/", 1)[0]
+
+    class Unpickler(pickle.Unpickler):
+        def find_class(self, mod, name):
+            if mod.split(".")[0] in ("collections", "builtins"):
+                return getattr(importlib.import_module(mod), name)
+            if name.endswith("Storage"):
+                return name
+            if name == "_rebuild_tensor_v2":
+                return lambda st, off, size, stride, *a, **k: ("T", st, off, tuple(size))
+            return lambda *a, **k: None
+
+        def persistent_load(self, pid):
+            return (pid[1], pid[2])  # (storage type name, zip data key)
+
+    obj = Unpickler(io.BytesIO(z.read(pkl))).load()
+
+    def walk(d, prefix=""):
+        for k, v in d.items():
+            if isinstance(v, dict):
+                yield from walk(v, prefix + str(k) + ".")
+            elif isinstance(v, tuple) and v and v[0] == "T":
+                yield prefix + str(k), v
+
+    tensors = {}
+    for name, (_, (tname, key), off, shape) in walk(obj):
+        raw = z.read("%s/data/%s" % (root, key))
+        a = np.frombuffer(raw, dtype=PTH_DTYPES[tname])
+        n = int(np.prod(shape)) if shape else 1
+        tensors[name] = a[off : off + n].astype(np.float32).reshape(shape)
+    return tensors
+
+def load_dav_encoder(path):
+    """DAC-VAE encoder of the dav.pth training checkpoint, renamed to the
+    decoder naming vocabulary (its decoder half is bit-identical to the
+    published vocoder). Kept: encoder.* and the posterior mean projection."""
+    raw = load_pth_tensors(path)
+    sub = {"0": "snake1.alpha", "1": "conv1", "2": "snake2.alpha", "3": "conv2"}
+    out = {}
+    for name, a in raw.items():
+        p = name.split(".")
+        if name.startswith("mean_proj."):
+            out["encoder.mean_proj." + p[1]] = a
+        elif name.startswith("encoder.block.0."):
+            out["encoder.conv_in." + p[3]] = a
+        elif name.startswith("encoder.block.5."):
+            out["encoder.snake_out.alpha"] = a
+        elif name.startswith("encoder.block.6."):
+            out["encoder.conv_out." + p[3]] = a
+        elif name.startswith("encoder.block."):
+            blk = "encoder.blocks.%d." % (int(p[2]) - 1)
+            if p[4] in ("0", "1", "2"):
+                tail = sub[p[6]]
+                out[blk + "res_unit%d." % (int(p[4]) + 1) + (tail if p[6] in ("0", "2") else tail + "." + p[7])] = a
+            elif p[4] == "3":
+                out[blk + "snake1.alpha"] = a
+            else:
+                out[blk + "conv1." + p[5]] = a
+    return out
+
 def convert_vae():
-    """vocoder/ -> MiniMax-Music3-vocoder-F32.gguf, weight norm folded, native F32."""
+    """vocoder/ + dav.pth encoder -> MiniMax-Music3-vocoder-F32.gguf,
+    weight norm folded, native F32. Decoder tensors mirror the published
+    subfolder byte-perfect; encoder tensors come from the dav.pth training
+    checkpoint whose decoder half is bit-identical to the published one."""
     tensors = fold_weight_norm(load_sf_tensors(os.path.join(CHECKPOINT_DIR, COMPONENTS["vae"])))
+    dav_path = os.path.join(CHECKPOINT_DIR, "dav.pth")
+    if not os.path.exists(dav_path):
+        log("vae", "FATAL: %s missing (run ./checkpoints.sh)" % dav_path)
+        sys.exit(1)
+    tensors.update(fold_weight_norm(load_dav_encoder(dav_path)))
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     out_path = os.path.join(OUTPUT_DIR, "MiniMax-Music3-vocoder-F32.gguf")
 
     w = gguf.GGUFWriter(out_path, arch="mm3-vae")
-    w.add_name("MiniMax-Music3 Flow-VAE decoder")
+    w.add_name("MiniMax-Music3 Flow-VAE")
     w.add_uint32("mm3-vae.latent_channels", 128)
     w.add_uint32("mm3-vae.sampling_rate", 44100)
     w.add_array("mm3-vae.upsampling_ratios", [8, 8, 4, 2])

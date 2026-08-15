@@ -101,10 +101,15 @@ static std::string resolve_model(const std::vector<ModelEntry> & bucket,
 }
 
 int main(int argc, char ** argv) {
-    std::string       models = "./models", out_path = "request.json", request_path, dump_tokens_path;
+    std::string       models, out_path = "request.json", request_path, dump_tokens_path;
     MM3Request        req;
     MM3PipelineParams params;
     request_init(&req);
+
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
+    }
 
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
@@ -142,6 +147,11 @@ int main(int argc, char ** argv) {
         }
     }
 
+    if (models.empty()) {
+        fprintf(stderr, "[CLI] ERROR: --models required\n");
+        print_usage(argv[0]);
+        return 1;
+    }
     if (!request_path.empty()) {
         std::string json = read_file(request_path.c_str());
         if (json.empty() || !request_parse_json(&req, json.c_str())) {
@@ -151,7 +161,6 @@ int main(int argc, char ** argv) {
     }
     if (req.caption.empty() || req.lyrics.empty()) {
         fprintf(stderr, "[LM] FATAL: caption and lyrics are required\n");
-        print_usage(argv[0]);
         return 1;
     }
     if (!req.audio_codes.empty()) {

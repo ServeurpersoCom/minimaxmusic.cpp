@@ -162,7 +162,7 @@ static void worker_main() {
 // when its resolved path changes and retries after a failed load.
 static MM3Pipeline       g_pipeline;
 static MM3PipelineParams g_params;
-static std::string       g_models_dir = "./models";
+static std::string       g_models_dir;
 
 // model registry (populated at startup from GGUF metadata)
 static ModelRegistry g_registry;
@@ -701,6 +701,11 @@ int main(int argc, char ** argv) {
     std::string host = "127.0.0.1";
     int         port = 8086;
 
+    if (argc < 2) {
+        print_usage(argv[0]);
+        return 1;
+    }
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--host") == 0 && i + 1 < argc) {
             host = argv[++i];
@@ -727,6 +732,12 @@ int main(int argc, char ** argv) {
             print_usage(argv[0]);
             return 1;
         }
+    }
+
+    if (g_models_dir.empty()) {
+        fprintf(stderr, "[Server] ERROR: --models is required\n");
+        print_usage(argv[0]);
+        return 1;
     }
 
     LogCapture log_capture;

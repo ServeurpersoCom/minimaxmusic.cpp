@@ -244,10 +244,6 @@ def compare(dirs, stages, tag):
     pairs = [(labels[i], labels[j]) for i in range(len(labels)) for j in range(i + 1, len(labels))]
 
     print(f"[{tag}] Cosine similarities GGML vs Python")
-    print(f"  {'stage':30s}", end="")
-    for a, b in pairs:
-        print(f" {a + ' vs ' + b:>14s}", end="")
-    print()
 
     for stage in stages:
         data = {}
@@ -257,16 +253,16 @@ def compare(dirs, stages, tag):
                 data[label] = load_dump(f)
         if not data:
             continue
-        print(f"  {stage:30s}", end="")
+        parts = []
         for a, b in pairs:
             if a in data and b in data:
                 da, sa = data[a]
                 db, sb = data[b]
                 c = cos(da, db, sa, sb)
-                print(f" {c:>14.6f}", end="")
+                parts.append(f"{a} vs {b} {c:.6f}")
             else:
-                print(f" {'N/A':>14s}", end="")
-        print()
+                parts.append(f"{a} vs {b} N/A")
+        print(f"{stage}: " + ", ".join(parts))
 
     vae_data = {}
     for label, d in dirs.items():
@@ -274,16 +270,16 @@ def compare(dirs, stages, tag):
         if os.path.isfile(f):
             vae_data[label] = load_dump(f)
     if len(vae_data) >= 2:
-        print(f"  {'vae_audio (STFT cosine)':30s}", end="")
+        parts = []
         for a, b in pairs:
             if a in vae_data and b in vae_data:
                 left_a = vae_data[a][0].reshape(-1, 2)[:, 0]
                 left_b = vae_data[b][0].reshape(-1, 2)[:, 0]
                 c = stft_cos(left_a, left_b)
-                print(f" {c:>14.6f}", end="")
+                parts.append(f"{a} vs {b} {c:.6f}")
             else:
-                print(f" {'N/A':>14s}", end="")
-        print()
+                parts.append(f"{a} vs {b} N/A")
+        print("vae_audio (STFT cosine): " + ", ".join(parts))
 
     if len(pairs) > 0:
         a_label, b_label = pairs[0]
@@ -291,8 +287,6 @@ def compare(dirs, stages, tag):
         xt_stages = [s for s in stages if "_xt" in s]
         if xt_stages:
             print(f"[{tag}] Error growth GGML vs Python")
-            print(f"  {'stage':22s} {'cos':>10s} {'max_err':>10s} {'mean_err':>10s}"
-                  f" {'mean_A':>10s} {'std_A':>10s} {'mean_B':>10s} {'std_B':>10s}")
             for stage in xt_stages:
                 fa = os.path.join(a_dir, stage + ".bin")
                 fb = os.path.join(b_dir, stage + ".bin")
@@ -303,15 +297,16 @@ def compare(dirs, stages, tag):
                     da, db = da[:n], db[:n]
                     c = _cos_flat(da, db)
                     diff = np.abs(da - db)
-                    print(f"  {stage:22s} {c:10.6f} {diff.max():10.6f} {diff.mean():10.6f}"
-                          f" {da.mean():10.6f} {da.std():10.6f} {db.mean():10.6f} {db.std():10.6f}")
+                    print(f"{stage}: cos {c:.6f}, max_err {diff.max():.6f}, mean_err {diff.mean():.6f},"
+                          f" mean_A {da.mean():.6f}, std_A {da.std():.6f},"
+                          f" mean_B {db.mean():.6f}, std_B {db.std():.6f}")
                 else:
                     missing = []
                     if not os.path.isfile(fa):
                         missing.append(a_label)
                     if not os.path.isfile(fb):
                         missing.append(b_label)
-                    print(f"  {stage:22s} missing: {', '.join(missing)}")
+                    print(f"{stage}: missing {', '.join(missing)}")
 
 
 # main

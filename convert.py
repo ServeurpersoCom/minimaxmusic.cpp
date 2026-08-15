@@ -187,7 +187,7 @@ def convert_vae():
         if name.endswith(".alpha"):
             a = a.reshape(-1)
         w.add_tensor(name, np.ascontiguousarray(a.astype(np.float32)))
-        log("vae", "%-48s %s" % (name, list(a.shape)))
+        log("vae", "%s %s" % (name, list(a.shape)))
 
     w.write_header_to_file()
     w.write_kv_data_to_file()
@@ -213,7 +213,7 @@ def convert_cond():
 
     for name in sorted(tensors):
         w.add_tensor(name, np.ascontiguousarray(tensors[name].astype(np.float32)))
-        log("cond", "%-24s %s" % (name, list(tensors[name].shape)))
+        log("cond", "%s %s" % (name, list(tensors[name].shape)))
 
     w.write_header_to_file()
     w.write_kv_data_to_file()

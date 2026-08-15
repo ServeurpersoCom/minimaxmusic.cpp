@@ -100,8 +100,8 @@ int main(int argc, char ** argv) {
     } else if (ends_with(output, ".wav")) {
         ok = audio_write_wav(output, audio, T, sr, wav_fmt);
     } else {
-        fprintf(stderr, "[MP3-Codec] Cannot determine format from output extension\n");
-        fprintf(stderr, "  use .mp3 for encoding, .wav for decoding\n");
+        fprintf(stderr,
+                "[MP3-Codec] Cannot determine format from output extension (use .mp3 to encode, .wav to decode)\n");
         free(audio);
         return 1;
     }

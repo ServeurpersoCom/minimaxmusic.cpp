@@ -69,7 +69,7 @@ can be skipped.
 
 ```bash
 pip install hf gguf numpy
-hf download MiniMaxAI/MiniMax-Music3 --local-dir checkpoints
+./checkpoints.sh  # downloads the needed subfolders of MiniMaxAI/MiniMax-Music3
 ./convert.py      # native GGUF, byte-exact dtypes from the source, skips existing
 ./quantize.sh     # every quant from the natives, idempotent
 ```

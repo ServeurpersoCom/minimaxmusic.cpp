@@ -676,15 +676,19 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
 }
 
 static void print_usage(const char * argv0) {
+    fprintf(stderr, "minimaxmusic.cpp %s\n\n", MM3_VERSION);
     fprintf(stderr,
             "Usage: %s --models <dir> [options]\n"
+            "\n"
             "Required:\n"
             "  --models <dir>         Directory of GGUF model files\n"
+            "\n"
             "Server:\n"
             "  --host <addr>          Listen address (default: 127.0.0.1)\n"
             "  --port <N>             Listen port (default: 8086)\n"
             "  --max-batch <N>        LM batch limit (default: 1)\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
+            "\n"
             "Debug:\n"
             "  --no-fa                Disable flash attention\n"
             "  --no-batch-cfg         Split CFG into two separate forwards (LM + DiT)\n"

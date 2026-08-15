@@ -17,12 +17,15 @@
 #include <vector>
 
 static void print_usage(const char * argv0) {
+    fprintf(stderr, "minimaxmusic.cpp %s\n\n", MM3_VERSION);
     fprintf(stderr,
             "Usage: %s --models <dir> --request <json> [options]\n"
             "       %s --models <dir> --caption <text> --lyrics <text> [options]\n"
+            "\n"
             "Required:\n"
             "  --models <dir>         Directory of GGUF model files\n"
             "  --request <json>       Input request JSON (carries model routing)\n"
+            "\n"
             "Optional:\n"
             "  --caption <text>       Caption (instead of --request)\n"
             "  --lyrics <text>        Lyrics (instead of --request)\n"
@@ -31,6 +34,7 @@ static void print_usage(const char * argv0) {
             "  --steps <N>            Euler steps per DiT window\n"
             "  --seed <N>             DiT noise seed\n"
             "  --lm-seed <N>          Autoregressive sampling seed\n"
+            "\n"
             "Debug:\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
             "  --no-fa                Disable flash attention\n"
@@ -80,8 +84,6 @@ static std::string resolve_model(const std::vector<ModelEntry> & bucket,
 }
 
 int main(int argc, char ** argv) {
-    fprintf(stderr, "minimaxmusic.cpp %s\n", MM3_VERSION);
-
     std::string       models = "./models", out_path = "out.mp3", request_path;
     MM3Request        req;
     MM3PipelineParams params;

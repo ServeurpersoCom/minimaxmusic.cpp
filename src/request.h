@@ -32,6 +32,12 @@ struct MM3Request {
     // song-major: song * synth_batch_size + variation.
     int synth_batch_size;  // 1
 
+    // codes (Python-compatible string: "8113,404,...", 8 per frame:
+    // semantic then the 7 acoustic codebooks). Non-empty replaces the
+    // autoregressive stage: the hiddens are re-derived teacher-forced
+    // and the song renders deterministically from these codes.
+    std::string audio_codes;  // ""
+
     // guidance
     float lm_cfg;    // 1.5, CFG scale on LM and depth decoder logits
     int   lm_top_k;  // 50, applied to the conditional branch ranking

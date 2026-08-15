@@ -453,8 +453,9 @@ static void qw3lm_forward(Qwen3LM *     m,
                           int           n_tokens,
                           int           kv_set,
                           float *       logits,
-                          const float * input_embeds = nullptr,
-                          float *       out_hidden   = nullptr) {
+                          const float * input_embeds   = nullptr,
+                          float *       out_hidden     = nullptr,
+                          float *       out_hidden_all = nullptr) {
     if (m->batch_graph.graph.sched_allocated) {
         static_graph_release(&m->batch_graph.graph, m->sched);
         m->batch_graph.built = false;
@@ -545,6 +546,16 @@ static void qw3lm_forward(Qwen3LM *     m,
     // Final norm
     hidden = qwen3_rms_norm(ctx, hidden, m->final_norm, c.rms_norm_eps);
 
+    // Full-sequence hidden states after final norm, exposed for the
+    // teacher-forced replay (one output per position)
+    struct ggml_tensor * all_hidden = nullptr;
+    if (n_tokens > 1) {
+        all_hidden = ggml_cont(ctx, hidden);
+        ggml_set_name(all_hidden, "all_hidden");
+        ggml_set_output(all_hidden);
+        ggml_build_forward_expand(gf, all_hidden);
+    }
+
     // Extract last token hidden state: [H, n_tokens] -> [H, 1]
     if (n_tokens > 1) {
         hidden = ggml_view_1d(ctx, hidden, H, (int64_t) (n_tokens - 1) * H * sizeof(float));
@@ -612,6 +623,10 @@ static void qw3lm_forward(Qwen3LM *     m,
     ggml_backend_tensor_get(lgt, logits, 0, c.vocab_size * sizeof(float));
     if (out_hidden) {
         ggml_backend_tensor_get(hidden_out, out_hidden, 0, (size_t) H * sizeof(float));
+    }
+    if (out_hidden_all) {
+        ggml_backend_tensor_get(all_hidden ? all_hidden : hidden_out, out_hidden_all, 0,
+                                (size_t) n_tokens * H * sizeof(float));
     }
 
     // Advance KV position. The arena and the sched allocation persist

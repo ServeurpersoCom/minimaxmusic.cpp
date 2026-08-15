@@ -116,6 +116,9 @@ static bool ensure_component(const char *        tag,
     return true;
 }
 
+static bool ensure_ar_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
+static bool ensure_synth_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
+
 bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
     p->params = params;
     debug_init(&p->dumper, params.dump_dir);
@@ -126,7 +129,11 @@ bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3Pipe
         fprintf(stderr, "[Pipeline] Flash attention disabled\n");
     }
 
-    // Tokenizer travels with the LM GGUF
+    return ensure_ar_components(p, paths, params) && ensure_synth_components(p, paths, params);
+}
+
+// The autoregressive pair: tokenizer travels with the LM GGUF
+static bool ensure_ar_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
     bool ok = ensure_component(
         "LM", p->loaded.lm, paths.lm,
         [&] {
@@ -141,11 +148,26 @@ bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3Pipe
             return true;
         },
         [&] { qw3lm_free(&p->lm); });
-    ok = ok && ensure_component(
-                   "Depth", p->loaded.depth, paths.depth, [&] { return p->depth.load(paths.depth.c_str()); },
-                   [&] { p->depth.free(); });
-    ok = ok && ensure_component(
-                   "Cond", p->loaded.cond, paths.cond,
+    return ok && ensure_component(
+                     "Depth", p->loaded.depth, paths.depth, [&] { return p->depth.load(paths.depth.c_str()); },
+                     [&] { p->depth.free(); });
+}
+
+bool pipeline_ensure_lm(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
+    p->params = params;
+    debug_init(&p->dumper, params.dump_dir);
+    if (params.clamp_fp16) {
+        fprintf(stderr, "[Pipeline] FP16 clamp enabled\n");
+    }
+    if (!params.use_fa) {
+        fprintf(stderr, "[Pipeline] Flash attention disabled\n");
+    }
+    return ensure_ar_components(p, paths, params);
+}
+
+static bool ensure_synth_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
+    bool ok = ensure_component(
+        "Cond", p->loaded.cond, paths.cond,
                    [&] {
                        if (!p->cond_enc.load(paths.cond.c_str())) {
                            return false;
@@ -171,18 +193,140 @@ bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3Pipe
     return ok;
 }
 
-PipelineStatus pipeline_generate(MM3Pipeline *                     p,
-                                 const MM3Request &                req,
-                                 std::atomic<bool> *               cancel,
-                                 std::vector<std::vector<float>> & tracks_out) {
-    Timer total_timer;
+// Serialize a code stream to the audio_codes wire format: flat comma
+// separated, 8 values per frame (semantic then the 7 acoustic codebooks)
+static std::string codes_serialize(const std::vector<int> & codes) {
+    std::string out;
+    out.reserve(codes.size() * 6);
+    char buf[16];
+    for (size_t i = 0; i < codes.size(); i++) {
+        snprintf(buf, sizeof(buf), i ? ",%d" : "%d", codes[i]);
+        out += buf;
+    }
+    return out;
+}
 
-    int N = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
-    if (N > p->params.max_batch) {
-        fprintf(stderr, "[Pipeline] FATAL: lm_batch_size %d exceeds the batch limit %d\n", N, p->params.max_batch);
+// Parse and validate the audio_codes wire format. Empty result = invalid.
+static std::vector<int> codes_parse(const std::string & s) {
+    std::vector<int> out;
+    const char *     c = s.c_str();
+    while (*c) {
+        char * end  = nullptr;
+        long   code = strtol(c, &end, 10);
+        if (end == c) {
+            fprintf(stderr, "[AR] FATAL: invalid audio_codes near \"%.16s\"\n", c);
+            return {};
+        }
+        out.push_back((int) code);
+        c = *end == ',' ? end + 1 : end;
+    }
+    if (out.size() < 16 || out.size() % 8 != 0) {
+        fprintf(stderr, "[AR] FATAL: audio_codes needs 8 codes per frame, at least 2 frames (got %zu values)\n",
+                out.size());
+        return {};
+    }
+    for (size_t i = 0; i < out.size(); i++) {
+        int hi = (i % 8 == 0) ? MM3_SEMANTIC_VOCAB : DepthDecoder::VOCAB;
+        if (out[i] < 0 || out[i] >= hi) {
+            fprintf(stderr, "[AR] FATAL: audio_codes value %d out of range at index %zu\n", out[i], i);
+            return {};
+        }
+    }
+    return out;
+}
+
+// Teacher-forced replay: re-derive the 8 hidden states per frame from an
+// explicit code stream, no sampling. The LM runs the whole feedback
+// sequence as one full forward (conditional stream only: the hiddens
+// never depended on the CFG branch), the depth decoder runs one S=8
+// causal forward per frame, positions 1..7 reproducing the step hiddens.
+static PipelineStatus replay_stage(MM3Pipeline *        p,
+                                   const MM3Request &   req,
+                                   std::atomic<bool> *  cancel,
+                                   std::vector<float> & frame_hiddens) {
+    Timer ar_timer;
+
+    std::vector<int> codes = codes_parse(req.audio_codes);
+    if (codes.empty()) {
+        return PIPELINE_FAILED;
+    }
+    int n = (int) (codes.size() / 8) - 1;  // hidden frames: frame 0 only feeds the first LM feedback
+
+    std::vector<int> cond_ids = mm3_build_prompt_ids(
+        [&](const std::string & str) { return bpe_encode(&p->tok, str, false); }, req.caption, req.lyrics);
+    fprintf(stderr, "[Prompt] %zu tokens\n", cond_ids.size());
+
+    const int H  = p->lm.cfg.hidden_size;
+    const int V  = p->lm.cfg.vocab_size;
+    const int NC = DepthDecoder::CODEBOOKS - 1;
+
+    if (n > MAX_FRAMES || (int) cond_ids.size() + n >= p->lm.cfg.max_seq_len) {
+        fprintf(stderr, "[AR] FATAL: audio_codes carry %d frames, over the budget (prompt %zu tokens)\n", n,
+                cond_ids.size());
         return PIPELINE_FAILED;
     }
 
+    qw3lm_reset_kv(&p->lm, 0);
+    std::vector<float> logits(V);
+    qw3lm_forward(&p->lm, cond_ids.data(), (int) cond_ids.size(), 0, logits.data());
+
+    // Feedback embeddings f_0 .. f_{n-1}, one full-sequence forward
+    std::vector<float> embeds((size_t) n * H), emb(H);
+    float              scale = 1.0f / sqrtf((float) DepthDecoder::CODEBOOKS);
+    for (int t = 0; t < n; t++) {
+        const int * f = codes.data() + (size_t) t * 8;
+        mm3_lm_embed_row(&p->lm, f[0] + MM3_AUDIO_CODE_OFFSET, emb.data());
+        for (int cb = 1; cb <= NC; cb++) {
+            const float * row = p->depth.audio_embedding_row(cb, f[cb]);
+            for (int j = 0; j < H; j++) {
+                emb[j] += row[j];
+            }
+        }
+        for (int j = 0; j < H; j++) {
+            emb[j] *= scale;
+        }
+        memcpy(embeds.data() + (size_t) t * H, emb.data(), (size_t) H * sizeof(float));
+    }
+    std::vector<float> all_hidden((size_t) n * H);
+    qw3lm_forward(&p->lm, nullptr, n, 0, logits.data(), embeds.data(), nullptr, all_hidden.data());
+
+    // Depth hiddens per frame: the whole step sequence is known upfront,
+    // one causal S=8 forward reproduces the 7 step hiddens
+    frame_hiddens.clear();
+    frame_hiddens.reserve((size_t) n * 8 * H);
+    std::vector<float> seq8((size_t) 8 * H), hid8((size_t) 8 * H), dlogits(DepthDecoder::VOCAB);
+    for (int k = 1; k <= n; k++) {
+        if (is_cancelled(cancel)) {
+            return PIPELINE_CANCELLED;
+        }
+        const int *   f  = codes.data() + (size_t) k * 8;
+        const float * hk = all_hidden.data() + (size_t) (k - 1) * H;
+        memcpy(seq8.data(), hk, (size_t) H * sizeof(float));
+        mm3_lm_embed_row(&p->lm, f[0] + MM3_AUDIO_CODE_OFFSET, seq8.data() + H);
+        for (int cb = 1; cb < NC; cb++) {
+            memcpy(seq8.data() + (size_t) (1 + cb) * H, p->depth.audio_embedding_row(cb, f[cb]),
+                   (size_t) H * sizeof(float));
+        }
+        if (!p->depth.forward(seq8.data(), 8, hid8.data(), dlogits.data())) {
+            return PIPELINE_FAILED;
+        }
+        frame_hiddens.insert(frame_hiddens.end(), hk, hk + H);
+        frame_hiddens.insert(frame_hiddens.end(), hid8.begin() + H, hid8.end());
+    }
+    fprintf(stderr, "[AR] Replay: %d frames from audio_codes (%.1fs of music), %.1f s\n", n, (float) n / FRAME_RATE,
+            ar_timer.ms() / 1000.0);
+    return PIPELINE_OK;
+}
+
+// Autoregressive stage: N songs sampled in one batched pass. Records
+// every song's code stream; hiddens_out is optional (null for mm-lm).
+static PipelineStatus ar_stage(MM3Pipeline *                     p,
+                               const MM3Request &                req,
+                               std::atomic<bool> *               cancel,
+                               int                               N,
+                               std::vector<std::vector<float>> * hiddens_out,
+                               std::vector<std::vector<int>> &   codes_out,
+                               std::vector<int> &                n_frames) {
     // Prompt pair, shared by every song in the batch
     std::vector<int> cond_ids = mm3_build_prompt_ids(
         [&](const std::string & s) { return bpe_encode(&p->tok, s, false); }, req.caption, req.lyrics);
@@ -259,8 +403,8 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
 
     // A song that ends stays in the batch as a passive row (stable graph
     // shapes, hot CUDA graphs); only its accumulation stops.
-    std::vector<std::vector<float>> frame_hiddens(N);  // per song [n, 8, 4096]
-    std::vector<bool>               done(N, false);
+    std::vector<int>  frames(N, 0);
+    std::vector<bool> done(N, false);
     std::vector<int>                sampled(N);
     std::vector<int>                kv_sets(2 * N);
     for (int s = 0; s < 2 * N; s++) {
@@ -344,16 +488,30 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
             }
         }
 
+        // The recorded code stream covers one more frame than the
+        // hiddens: frame 0 only feeds the first LM feedback
+        for (int i = 0; i < N; i++) {
+            if (done[i]) {
+                continue;
+            }
+            codes_out[i].push_back(sampled[i] - MM3_AUDIO_CODE_OFFSET);
+            codes_out[i].insert(codes_out[i].end(), codesN.begin() + (size_t) i * NC,
+                                codesN.begin() + (size_t) (i + 1) * NC);
+        }
+
         if (frame_index > 0) {
             for (int i = 0; i < N; i++) {
                 if (done[i]) {
                     continue;
                 }
-                frame_hiddens[i].insert(frame_hiddens[i].end(), cur_hidden.begin() + (size_t) i * H,
-                                        cur_hidden.begin() + (size_t) (i + 1) * H);
-                frame_hiddens[i].insert(frame_hiddens[i].end(), collectedN.begin() + (size_t) i * NC * H,
-                                        collectedN.begin() + (size_t) (i + 1) * NC * H);
-                if ((int) (frame_hiddens[i].size() / (8 * (size_t) H)) >= max_frames) {
+                if (hiddens_out) {
+                    (*hiddens_out)[i].insert((*hiddens_out)[i].end(), cur_hidden.begin() + (size_t) i * H,
+                                             cur_hidden.begin() + (size_t) (i + 1) * H);
+                    (*hiddens_out)[i].insert((*hiddens_out)[i].end(), collectedN.begin() + (size_t) i * NC * H,
+                                             collectedN.begin() + (size_t) (i + 1) * NC * H);
+                }
+                frames[i]++;
+                if (frames[i] >= max_frames) {
                     done[i] = true;
                 }
             }
@@ -400,18 +558,18 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         }
     }
 
-    std::vector<int> n_frames(N);
+    n_frames.assign(N, 0);
     for (int i = 0; i < N; i++) {
-        n_frames[i] = (int) (frame_hiddens[i].size() / (8 * (size_t) H));
+        n_frames[i] = frames[i];
         fprintf(stderr, "[AR] Song %d: %d frames (%.1fs of music)\n", i, n_frames[i], (float) n_frames[i] / FRAME_RATE);
         if (n_frames[i] == 0) {
             fprintf(stderr, "[AR] ERROR: song %d generated zero audio frames\n", i);
             return PIPELINE_FAILED;
         }
     }
-    if (p->dumper.enabled) {
+    if (p->dumper.enabled && hiddens_out) {
         int shape[3] = { n_frames[0], 8, H };
-        debug_dump(&p->dumper, "frame_hiddens", frame_hiddens[0].data(), shape, 3);
+        debug_dump(&p->dumper, "frame_hiddens", (*hiddens_out)[0].data(), shape, 3);
     }
     {
         int total = 0;
@@ -420,6 +578,49 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         }
         fprintf(stderr, "[AR] %d frames total, %.1f s (%.1f ms/frame)\n", total, ar_timer.ms() / 1000.0,
                 total > 0 ? ar_timer.ms() / total : 0.0);
+    }
+    return PIPELINE_OK;
+}
+
+PipelineStatus pipeline_generate(MM3Pipeline *                     p,
+                                 const MM3Request &                req,
+                                 std::atomic<bool> *               cancel,
+                                 std::vector<std::vector<float>> & tracks_out) {
+    Timer total_timer;
+
+    int N = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
+    if (N > p->params.max_batch) {
+        fprintf(stderr, "[Pipeline] FATAL: lm_batch_size %d exceeds the batch limit %d\n", N, p->params.max_batch);
+        return PIPELINE_FAILED;
+    }
+
+    const int H = p->lm.cfg.hidden_size;
+
+    std::vector<std::vector<float>> frame_hiddens;
+    std::vector<int>                n_frames;
+    if (!req.audio_codes.empty()) {
+        // Teacher-forced replay: the codes replace the sampling
+        if (req.lm_batch_size > 1) {
+            fprintf(stderr, "[AR] audio_codes provided: lm_batch_size ignored\n");
+        }
+        N = 1;
+        frame_hiddens.resize(1);
+        PipelineStatus st = replay_stage(p, req, cancel, frame_hiddens[0]);
+        if (st != PIPELINE_OK) {
+            return st;
+        }
+        n_frames.assign(1, (int) (frame_hiddens[0].size() / (8 * (size_t) H)));
+        if (p->dumper.enabled) {
+            int shape[3] = { n_frames[0], 8, H };
+            debug_dump(&p->dumper, "frame_hiddens", frame_hiddens[0].data(), shape, 3);
+        }
+    } else {
+        frame_hiddens.resize(N);
+        std::vector<std::vector<int>> codes(N);
+        PipelineStatus                st = ar_stage(p, req, cancel, N, &frame_hiddens, codes, n_frames);
+        if (st != PIPELINE_OK) {
+            return st;
+        }
     }
 
     // Windowed flow matching and decode: per song, M noise variations
@@ -652,6 +853,32 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         }
         fprintf(stderr, "[VAE] Decode: %zu windows -> %.1fs of audio, %.0f ms\n", chunk_starts.size(),
                 (float) T_last / (float) SAMPLE_RATE, vae_timer.ms());
+    }
+    fprintf(stderr, "[Done] %.1f s total\n", total_timer.ms() / 1000.0);
+    return PIPELINE_OK;
+}
+
+PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
+                                    const MM3Request &         req,
+                                    std::atomic<bool> *        cancel,
+                                    std::vector<std::string> & codes_out) {
+    Timer total_timer;
+
+    int N = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
+    if (N > p->params.max_batch) {
+        fprintf(stderr, "[Pipeline] FATAL: lm_batch_size %d exceeds the batch limit %d\n", N, p->params.max_batch);
+        return PIPELINE_FAILED;
+    }
+
+    std::vector<std::vector<int>> codes(N);
+    std::vector<int>              n_frames;
+    PipelineStatus                st = ar_stage(p, req, cancel, N, nullptr, codes, n_frames);
+    if (st != PIPELINE_OK) {
+        return st;
+    }
+    codes_out.resize(N);
+    for (int i = 0; i < N; i++) {
+        codes_out[i] = codes_serialize(codes[i]);
     }
     fprintf(stderr, "[Done] %.1f s total\n", total_timer.ms() / 1000.0);
     return PIPELINE_OK;

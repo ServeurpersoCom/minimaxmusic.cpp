@@ -143,6 +143,15 @@ For scripting without the server, `mm-synth` runs the full pipeline:
     --request /tmp/request.json
 ```
 
+The `mm-lm` tool runs the autoregressive stage alone and writes
+replayable request JSONs: the sampled codes travel in `audio_codes`, and
+feeding them back re-renders the same song with any synthesis settings.
+
+```bash
+./build/mm-lm --models models --request song.json --out plan.json
+./build/mm-synth --models models --request plan.json --out song.mp3
+```
+
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full JSON
 reference and the `neural-codec` (flow VAE latent playback), `mp3-codec`
 and `quantize` tools.

@@ -519,6 +519,21 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         json_error(res, 400, "synth_batch_size must be between 1 and 9");
         return;
     }
+    if (!r.audio_codes.empty()) {
+        size_t n = 1;
+        for (char c : r.audio_codes) {
+            if (c == ',') {
+                n++;
+            } else if ((c < '0' || c > '9') && c != '-') {
+                json_error(res, 400, "Invalid audio_codes");
+                return;
+            }
+        }
+        if (n < 16 || n % 8 != 0) {
+            json_error(res, 400, "audio_codes needs 8 codes per frame, at least 2 frames");
+            return;
+        }
+    }
 
     // Output format from MM3Request.output_format. Converts the string to
     // (output_wav, wav_fmt) using the same parser the CLI uses.

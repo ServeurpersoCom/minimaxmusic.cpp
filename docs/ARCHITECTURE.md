@@ -61,9 +61,10 @@ cmake .. -DGGML_CPU_ALL_VARIANTS=ON -DGGML_CUDA=ON -DGGML_VULKAN=ON -DGGML_BACKE
 cmake --build . --config Release -j %NUMBER_OF_PROCESSORS%
 ```
 
-Builds five binaries: `mm-synth` (full pipeline CLI), `mm-server` (HTTP
-server with embedded WebUI), `neural-codec` (flow VAE latent decoder),
-`mp3-codec` (MP3 encoder/decoder) and `quantize` (GGUF requantizer).
+Builds six binaries: `mm-lm` (autoregressive stage CLI), `mm-synth`
+(full pipeline CLI), `mm-server` (HTTP server with embedded WebUI),
+`neural-codec` (flow VAE latent decoder), `mp3-codec` (MP3
+encoder/decoder) and `quantize` (GGUF requantizer).
 
 A single `build/` directory serves every backend combination. With
 `buildall`, the backend is picked at runtime: the `GGML_BACKEND`
@@ -443,6 +444,15 @@ shared condition track with consecutive noise seeds (`seed + j`).
 Between 1 and 9. The job returns `lm_batch_size * synth_batch_size`
 tracks in song-major order.
 
+**`audio_codes`** (string, default `""`)
+Explicit code stream, flat comma separated, 8 values per frame (the
+semantic code then the 7 acoustic codebooks). Non-empty replaces the
+autoregressive sampling: the hidden states are re-derived teacher-forced
+from the codes (about an order of magnitude faster than sampling) and
+the song renders deterministically, so the synthesis side (models,
+steps, seed, CFG) can be iterated without re-rolling the LM. Produced by
+`mm-lm`; `lm_batch_size` is ignored when codes are present.
+
 **`dit_cfg`** (float, default `1.7`)
 CFG scale on the DiT velocity field.
 
@@ -464,6 +474,50 @@ GGUF filename per component, resolved against the `--models` registry.
 Empty keeps the currently loaded model, or falls to the first registry
 entry. Unknown names get a 400 from the server, a FATAL from the CLI. See
 [VRAM and model routing](#vram-and-model-routing).
+
+## mm-lm reference
+
+Runs the autoregressive stage alone (global LM + depth decoder) and
+writes one replayable request JSON per song, the sampled code stream in
+`audio_codes`. The expensive stochastic stage runs once; feeding the
+output back to `mm-synth --request` or `POST /synth` re-renders the same
+song with any synthesis parameters.
+
+```
+Usage: ./mm-lm --models <dir> --request <json> [options]
+       ./mm-lm --models <dir> --caption <text> --lyrics <text> [options]
+
+Required:
+  --models <dir>         Directory of GGUF model files
+  --request <json>       Input request JSON (carries model routing)
+
+Optional:
+  --caption <text>       Caption (instead of --request)
+  --lyrics <text>        Lyrics (instead of --request)
+  --out <path>           Output request JSON (default: request.json)
+  --duration <s>         Target duration in seconds
+  --lm-seed <N>          Autoregressive sampling seed
+
+Output is numbered for batches: request.json -> request0.json ...
+
+Debug:
+  --max-seq <N>          LM KV cache size (default: model context)
+  --no-fa                Disable flash attention
+  --no-batch-cfg         Split CFG into two separate forwards (LM + DiT)
+  --clamp-fp16           Clamp hidden states to FP16 range
+  --dump-tokens <path>   Dump prompt token IDs (CSV)
+```
+
+Only the LM and the depth decoder load (about 18.5 GB native, 7 GB
+quantized). The written requests carry the input request fields plus the
+song's codes and its traceable seed (`lm_seed + i`).
+
+The replay re-derives the hiddens without sampling: the LM runs the
+whole feedback sequence as one forward (conditional stream only) and the
+depth decoder runs one causal S=8 forward per frame, so the CFG batch
+shape differs from generation and the replayed hiddens sit at the usual
+activation epsilon from the sampled run (measured rel rms ~2e-3, final
+audio cosine ~0.99999: the same song).
 
 ## mm-synth reference
 

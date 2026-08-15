@@ -71,6 +71,10 @@ enum PipelineStatus {
 // empty so the next call retries it.
 bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
 
+// Load only the autoregressive stage (LM + depth decoder), for mm-lm.
+// Same reload semantics as pipeline_ensure; the other paths are ignored.
+bool pipeline_ensure_lm(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
+
 // Full text to audio generation. Seeds must be resolved by the caller
 // (request_resolve_seed / request_resolve_lm_seed).
 // tracks_out: lm_batch_size tracks, each planar stereo float [L:T][R:T]
@@ -81,3 +85,11 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  const MM3Request &                req,
                                  std::atomic<bool> *               cancel,
                                  std::vector<std::vector<float>> & tracks_out);
+
+// Autoregressive stage only: lm_batch_size code streams out, no
+// synthesis. codes_out[i] is the audio_codes string of song i (8 comma
+// separated codes per frame). Needs pipeline_ensure_lm at minimum.
+PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
+                                    const MM3Request &         req,
+                                    std::atomic<bool> *        cancel,
+                                    std::vector<std::string> & codes_out);

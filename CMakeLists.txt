@@ -115,7 +115,7 @@ target_link_libraries(mm-synth PRIVATE yyjson)
 link_ggml_backends(mm-synth)
 
 # mm-lm: hybrid LM inference (global LM + RVQ depth decoder)
-add_executable(mm-lm tools/mm-lm.cpp)
+add_executable(mm-lm tools/mm-lm.cpp src/pipeline.cpp src/request.cpp)
 target_link_libraries(mm-lm PRIVATE yyjson)
 link_ggml_backends(mm-lm)
 

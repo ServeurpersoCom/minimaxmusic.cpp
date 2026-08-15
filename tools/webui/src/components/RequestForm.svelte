@@ -344,7 +344,7 @@
 					/></label
 				>
 				<label
-					>Batch <input
+					>LM batch <input
 						type="text"
 						placeholder={ph(d?.lm_batch_size)}
 						bind:value={app.request.lm_batch_size}
@@ -389,7 +389,7 @@
 					/></label
 				>
 				<label
-					>Variations <input
+					>DiT batch <input
 						type="text"
 						placeholder={ph(d?.synth_batch_size)}
 						bind:value={app.request.synth_batch_size}

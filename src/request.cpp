@@ -24,6 +24,7 @@ void request_init(MM3Request * r) {
     r->lm_top_k         = 50;
     r->lm_batch_size    = 1;
     r->synth_batch_size = 1;
+    r->audio_codes.clear();
     r->dit_cfg          = 1.7f;
 
     r->peak_clip     = 10;
@@ -96,6 +97,9 @@ static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
     if ((v = yyjson_obj_get(obj, "synth_batch_size")) && yyjson_is_int(v)) {
         r->synth_batch_size = (int) yyjson_get_sint(v);
     }
+    if ((v = yyjson_obj_get(obj, "audio_codes")) && yyjson_is_str(v)) {
+        r->audio_codes = yyjson_get_str(v);
+    }
     if ((v = yyjson_obj_get(obj, "dit_cfg")) && yyjson_is_num(v)) {
         r->dit_cfg = (float) yyjson_get_num(v);
     }
@@ -156,6 +160,7 @@ std::string request_to_json(const MM3Request * r, bool sparse) {
     put_i("lm_top_k", r->lm_top_k, def.lm_top_k);
     put_i("lm_batch_size", r->lm_batch_size, def.lm_batch_size);
     put_i("synth_batch_size", r->synth_batch_size, def.synth_batch_size);
+    put_str("audio_codes", r->audio_codes, def.audio_codes);
     put_f("dit_cfg", r->dit_cfg, def.dit_cfg);
     put_i("peak_clip", r->peak_clip, def.peak_clip);
     put_str("output_format", r->output_format, def.output_format);

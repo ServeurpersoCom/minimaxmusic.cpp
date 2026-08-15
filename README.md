@@ -4,6 +4,28 @@ Local MiniMax Music 3 song generation server with browser UI, powered by GGML.
 Lyrics and a structured caption in, complete stereo 44.1kHz songs out.
 Runs on CPU, CUDA, Vulkan.
 
+## Download models
+
+Grab one GGUF of each type from Hugging Face and drop them in the
+`models/` folder:
+
+https://huggingface.co/Serveurperso/MiniMax-Music3-GGUF/tree/main
+
+| Type | Pick one | Size |
+|------|----------|------|
+| LM | MiniMax-Music3-language_model-Q8_0.gguf | 9.1 GB |
+| Depth decoder | MiniMax-Music3-rvq_depth_decoder-Q8_0.gguf | 690 MB |
+| DiT | MiniMax-Music3-transformer-Q8_0.gguf | 2.6 GB |
+| Condition encoder | MiniMax-Music3-condition_encoder-F32.gguf | 101 MB |
+| VAE | MiniMax-Music3-vocoder-F32.gguf | 217 MB |
+
+The LM also ships in BF16 / Q6_K / Q5_K_M, the DiT in F32 / Q6_K /
+Q5_K_M / Q4_K_M, the depth decoder in BF16. The full quantized combo
+runs in about 9 GB of VRAM, the full native set in about 29 GB.
+
+Alternative: `./models.sh` downloads the default set automatically
+(needs `pip install hf`), `./models.sh --all` everything.
+
 ## Build
 
 ```
@@ -38,8 +60,8 @@ macOS auto-enables Metal and Accelerate BLAS with any of the above.
 
 ## Convert
 
-No pre-quantized GGUF repository is published yet: the GGUFs are built
-locally from the official checkpoints. Download
+To build the GGUFs locally from the official checkpoints instead,
+download
 [MiniMaxAI/MiniMax-Music3](https://huggingface.co/MiniMaxAI/MiniMax-Music3)
 into `checkpoints/`. Only the five component subfolders and the tokenizer
 are used; the rest of the repository (`qwen_7B/`, training checkpoints)
@@ -59,10 +81,6 @@ hf download MiniMaxAI/MiniMax-Music3 --local-dir checkpoints
 | MiniMax-Music3-condition_encoder-F32.gguf | condition encoder | 101 MB |
 | MiniMax-Music3-transformer-F32.gguf | flow matching DiT 2.4B | 9.7 GB |
 | MiniMax-Music3-vocoder-F32.gguf | flow VAE decoder | 217 MB |
-
-Quantized variants: LM in Q5_K_M / Q6_K / Q8_0, DiT in Q4_K_M / Q5_K_M /
-Q6_K / Q8_0, depth decoder in Q8_0. The full quantized combo runs in
-about 9 GB of VRAM, the full native set in about 29 GB.
 
 ## Run
 
@@ -107,9 +125,13 @@ The server exposes one compute endpoint and a job system:
 
 **POST /synth** - Submit a generation job (JSON MM3Request), returns a job
 ID immediately. The single worker thread processes jobs in FIFO order.
+The body must be sent with `Content-Type: application/json` (the HTTP
+server caps urlencoded bodies at 8 KB).
 
 **GET /job?id=N** - Poll job status. **GET /job?id=N&result=1** fetches the
-result (MP3 or WAV, selected by `output_format` in the request).
+result as multipart/mixed: one JSON replay request part (the request with
+`audio_codes` and the exact seed of the track) then one audio part per
+track (MP3 or WAV, selected by `output_format` in the request).
 **POST /job?id=N&cancel=1** cancels a running job.
 
 **GET /health** - Returns `{"status":"ok"}`.
@@ -127,7 +149,11 @@ and MM3Request JSON specification.
 <details>
 <summary>CLI tools (advanced)</summary>
 
-For scripting without the server, `mm-synth` runs the full pipeline:
+For scripting without the server, `mm-synth` runs the full pipeline.
+Every rendered track gets its replay request written next to it
+(`song.mp3` + `song.json`): the sampled codes travel in `audio_codes`,
+and feeding that JSON back re-renders the same song with any synthesis
+settings (models, steps, seed, CFG).
 
 ```bash
 # quick one-shot
@@ -143,9 +169,8 @@ For scripting without the server, `mm-synth` runs the full pipeline:
     --request /tmp/request.json
 ```
 
-The `mm-lm` tool runs the autoregressive stage alone and writes
-replayable request JSONs: the sampled codes travel in `audio_codes`, and
-feeding them back re-renders the same song with any synthesis settings.
+The `mm-lm` tool runs the autoregressive stage alone and writes the
+same replayable request JSONs without synthesizing anything.
 
 ```bash
 ./build/mm-lm --models models --request song.json --out plan.json

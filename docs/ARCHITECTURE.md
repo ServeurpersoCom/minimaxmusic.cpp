@@ -451,7 +451,9 @@ autoregressive sampling: the hidden states are re-derived teacher-forced
 from the codes (about an order of magnitude faster than sampling) and
 the song renders deterministically, so the synthesis side (models,
 steps, seed, CFG) can be iterated without re-rolling the LM. Produced by
-`mm-lm`; `lm_batch_size` is ignored when codes are present.
+`mm-lm`, written by `mm-synth` next to every rendered track, and
+returned by the server as the JSON part paired with each audio track;
+`lm_batch_size` is ignored when codes are present.
 
 **`dit_cfg`** (float, default `1.7`)
 CFG scale on the DiT velocity field.
@@ -552,6 +554,12 @@ The output container follows `output_format` in the request (`--out` names
 the file). A default run and the server produce bit-identical audio for
 the same resolved request.
 
+Every rendered track gets its replay request written next to it, the
+audio extension swapped to `.json`: the base request with `audio_codes`
+and the exact seed of the track. Feeding it back re-renders the track
+deterministically. Batches number the base with song then variation
+index (`song.mp3` -> `song00.mp3` + `song00.json` ...).
+
 `--dump <dir>` writes the intermediate tensors consumed by the cosine
 similarity harness: per-frame fused hidden states, per-window condition
 and latent tracks, per-step DiT velocities and states of the first window,
@@ -604,18 +612,21 @@ failure is treated as permanent and fails subsequent jobs fast.
 
 ```
 POST /synth                     Submit a generation job, returns job ID
-  body: application/json MM3Request
+  body: application/json MM3Request (the Content-Type header is
+  required, urlencoded bodies are capped at 8 KB by the HTTP server)
   response: {"id":"1a2b..."}
   400 on malformed JSON, missing caption or lyrics, duration <= 0,
-  steps < 2, invalid output_format, unknown model name
+  steps < 2, prompt over the 5000 token budget, invalid output_format,
+  unknown model name
 
 GET  /job?id=N                  Poll job status
   response: {"status":"queued|running|done|failed|cancelled"}
 
 GET  /job?id=N&result=1         Fetch job result
-  audio/mpeg or audio/wav body (output_format of the request); batch
-  jobs (more than one track) respond multipart/mixed with one audio
-  part per track, boundary mm3-batch-boundary, song-major order
+  multipart/mixed, boundary mm3-batch-boundary: one application/json
+  replay request part (the request with audio_codes and the exact seed
+  of the track) then one audio/mpeg or audio/wav part per track
+  (output_format of the request), song-major order
   404 while the result is not ready
 
 POST /job?id=N&cancel=1         Cancel a specific job

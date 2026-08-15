@@ -59,16 +59,35 @@ export async function pollJob(id: string): Promise<void> {
 // GET /job?id=X&result=1: fetch job result. Batch jobs reply
 // multipart/mixed with one audio part per track in song-major order;
 // single-track jobs reply with the raw audio body.
-export async function jobResultBlobs(id: string): Promise<Blob[]> {
+// One rendered track: its audio and the replay request the server pairs
+// with it (audio_codes + exact seed, replays the track deterministically)
+export interface JobTrack {
+	request: MM3Request;
+	audio: Blob;
+}
+
+// GET /job?id=X&result=1: the finished tracks of a job. The response is
+// multipart/mixed, one JSON replay request part then one audio part per
+// track, in song-major order.
+export async function jobResultTracks(id: string): Promise<JobTrack[]> {
 	const res = await fetch(`job?id=${encodeURIComponent(id)}&result=1`);
 	if (!res.ok) throw new Error(`${res.status} Result not ready`);
 	const ct = res.headers.get('Content-Type') || '';
-	if (!ct.startsWith('multipart/')) {
-		return [await res.blob()];
-	}
 	const match = ct.match(/boundary=([^\s;]+)/);
 	if (!match) throw new Error('Missing boundary in multipart response');
-	return parseMultipartParts(new Uint8Array(await res.arrayBuffer()), match[1]);
+	const parts = parseMultipartParts(new Uint8Array(await res.arrayBuffer()), match[1]);
+
+	const tracks: JobTrack[] = [];
+	let pending: MM3Request | null = null;
+	for (const part of parts) {
+		if (part.type === 'application/json') {
+			pending = JSON.parse(await part.text()) as MM3Request;
+		} else if (pending) {
+			tracks.push({ request: pending, audio: part });
+			pending = null;
+		}
+	}
+	return tracks;
 }
 
 // Split a multipart/mixed body on its boundary and return one Blob per

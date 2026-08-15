@@ -21,6 +21,7 @@
 #include "audio-io.h"
 #include "model-registry.h"
 #include "pipeline.h"
+#include "prompt.h"
 #include "request.h"
 #include "version.h"
 #include "yyjson.h"
@@ -166,6 +167,12 @@ static std::string       g_models_dir = "./models";
 // model registry (populated at startup from GGUF metadata)
 static ModelRegistry g_registry;
 
+// Prompt budget of the official serving stack, enforced at submit.
+// The tokenizer loads from the first LM GGUF at startup (metadata only).
+static const int    MAX_PROMPT_TOKENS = 5000;
+static BPETokenizer g_tok;
+static bool         g_tok_ready = false;
+
 // resolve a requested model name against a registry bucket.
 // empty request = the currently loaded model, else the first entry.
 // unknown names resolve to an empty path (the caller replies 400).
@@ -220,14 +227,21 @@ static void resolve_paths(const MM3Request & r, MM3ModelPaths & paths) {
     paths.vae               = resolve_model(g_registry.vae, r.vae_model, l.vae);
 }
 
-// Build a multipart/mixed body with one audio part per generated track.
-// The boundary is fixed; the client splits on it.
+// Build a multipart/mixed body with one JSON replay request part
+// followed by its audio part, per rendered track. The boundary is
+// fixed; the client splits on it and types parts by their header.
 static const char * MULTIPART_BOUNDARY = "mm3-batch-boundary";
 
-static std::string multipart_build_audio(const std::vector<std::string> & audio_parts, const char * audio_mime) {
+static std::string multipart_build_tracks(const std::vector<std::string> & request_parts,
+                                          const std::vector<std::string> & audio_parts,
+                                          const char *                     audio_mime) {
     std::string body;
     for (size_t i = 0; i < audio_parts.size(); i++) {
         body += "--";
+        body += MULTIPART_BOUNDARY;
+        body += "\r\nContent-Type: application/json\r\n\r\n";
+        body += request_parts[i];
+        body += "\r\n--";
         body += MULTIPART_BOUNDARY;
         body += "\r\nContent-Type: ";
         body += audio_mime;
@@ -519,6 +533,14 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         json_error(res, 400, "synth_batch_size must be between 1 and 9");
         return;
     }
+    if (g_tok_ready) {
+        std::vector<int> ids = mm3_build_prompt_ids([](const std::string & s) { return bpe_encode(&g_tok, s, false); },
+                                                    r.caption, r.lyrics);
+        if ((int) ids.size() > MAX_PROMPT_TOKENS) {
+            json_error(res, 400, "Prompt exceeds the 5000 token budget");
+            return;
+        }
+    }
     if (!r.audio_codes.empty()) {
         size_t n = 1;
         for (char c : r.audio_codes) {
@@ -567,7 +589,8 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         fprintf(stderr, "[Server] Job %s: %s\n", job->id.c_str(), request_to_json(&r).c_str());
 
         std::vector<std::vector<float>> tracks;
-        PipelineStatus                  status = pipeline_generate(&g_pipeline, r, &job->cancel, tracks);
+        std::vector<std::string>        codes;
+        PipelineStatus                  status = pipeline_generate(&g_pipeline, r, &job->cancel, tracks, &codes);
         if (status == PIPELINE_CANCELLED) {
             job->status.store(JobStatus::CANCELLED);
             return;
@@ -594,15 +617,15 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
                 return;
             }
         }
-        if (parts.size() == 1) {
-            // Single track responds with the raw audio body
-            job->result_body = std::move(parts[0]);
-            job->result_mime = mime;
-        } else {
-            // Batches respond multipart/mixed, one audio part per track
-            job->result_body = multipart_build_audio(parts, mime);
-            job->result_mime = MULTIPART_MIME;
+        // Every response is multipart/mixed: one replay request part and
+        // one audio part per track. Codes are per song, seeds per track.
+        int                      M = (int) (tracks.size() / codes.size());
+        std::vector<std::string> requests(parts.size());
+        for (size_t i = 0; i < parts.size(); i++) {
+            requests[i] = request_replay_json(r, codes[i / M], (int) (i % M));
         }
+        job->result_body = multipart_build_tracks(requests, parts, mime);
+        job->result_mime = MULTIPART_MIME;
         job->status.store(JobStatus::DONE);
     });
 
@@ -705,6 +728,12 @@ int main(int argc, char ** argv) {
     LogCapture log_capture;
 
     registry_scan(&g_registry, g_models_dir.c_str());
+    if (!g_registry.lm.empty()) {
+        g_tok_ready = load_bpe_from_gguf(&g_tok, g_registry.lm.front().path.c_str());
+        if (!g_tok_ready) {
+            fprintf(stderr, "[Server] WARNING: tokenizer load failed, prompt budget unchecked at submit\n");
+        }
+    }
 
     httplib::Server svr;
     g_svr = &svr;

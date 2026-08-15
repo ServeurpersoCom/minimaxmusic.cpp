@@ -165,13 +165,16 @@ int main(int argc, char ** argv) {
     }
 
     std::vector<std::vector<float>> tracks;
-    if (pipeline_generate(&pipeline, req, nullptr, tracks) != PIPELINE_OK) {
+    std::vector<std::string>        codes;
+    if (pipeline_generate(&pipeline, req, nullptr, tracks, &codes) != PIPELINE_OK) {
         return 1;
     }
 
     // encode (peak normalize + encode), WAV_F32 preserves full range.
     // A single track lands on --out as given; a batch numbers the base
     // with song then variation index: song.mp3 -> song00.mp3 ...
+    // Every track gets its replay request next to it (.json), carrying
+    // the audio_codes and the exact seed of that track.
     int M = (int) tracks.size() / (req.lm_batch_size < 1 ? 1 : req.lm_batch_size);
     for (size_t i = 0; i < tracks.size(); i++) {
         std::string path = out_path;
@@ -191,6 +194,19 @@ int main(int argc, char ** argv) {
             return 1;
         }
         fprintf(stderr, "[Out] %s\n", path.c_str());
+
+        size_t      pdot      = path.rfind('.');
+        std::string json_path = (pdot != std::string::npos ? path.substr(0, pdot) : path) + ".json";
+        std::string json      = request_replay_json(req, codes[i / M], (int) (i % M));
+        FILE *      jf        = fopen(json_path.c_str(), "wb");
+        if (!jf) {
+            fprintf(stderr, "[Out] FATAL: cannot write %s\n", json_path.c_str());
+            return 1;
+        }
+        fwrite(json.data(), 1, json.size(), jf);
+        fputc('\n', jf);
+        fclose(jf);
+        fprintf(stderr, "[Out] %s\n", json_path.c_str());
     }
     return 0;
 }

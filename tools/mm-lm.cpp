@@ -82,8 +82,9 @@ static bool write_file(const char * path, const std::string & data) {
     return wr == data.size();
 }
 
-static std::string resolve_model(const std::vector<ModelEntry> & bucket, const std::string & requested,
-                                 const char * component) {
+static std::string resolve_model(const std::vector<ModelEntry> & bucket,
+                                 const std::string &             requested,
+                                 const char *                    component) {
     if (bucket.empty()) {
         fprintf(stderr, "[LM] FATAL: no %s model found in --models directory\n", component);
         return "";
@@ -201,11 +202,11 @@ int main(int argc, char ** argv) {
     // One replayable request per song: the input request with its song's
     // codes and traceable per-song seed. song.json -> song0.json ...
     for (size_t i = 0; i < codes.size(); i++) {
-        MM3Request out       = req;
-        out.audio_codes      = codes[i];
-        out.lm_seed          = req.lm_seed + (int64_t) i;
-        out.lm_batch_size    = 1;
-        std::string path     = out_path;
+        MM3Request out    = req;
+        out.audio_codes   = codes[i];
+        out.lm_seed       = req.lm_seed + (int64_t) i;
+        out.lm_batch_size = 1;
+        std::string path  = out_path;
         if (codes.size() > 1) {
             size_t dot = out_path.rfind('.');
             path       = dot != std::string::npos ? out_path.substr(0, dot) + std::to_string(i) + out_path.substr(dot) :

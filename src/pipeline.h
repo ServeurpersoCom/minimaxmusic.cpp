@@ -81,10 +81,13 @@ bool pipeline_ensure_lm(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3P
 // at 44100 Hz, full range (normalization and clipping belong to the
 // output encoding stage). Song i samples with lm_seed + i.
 // cancel: optional, polled at stage boundaries. NULL disables cancellation.
+// codes_out: optional, the audio_codes stream of each song, identical
+// to the input codes under replay. Feeds request_replay_json.
 PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  const MM3Request &                req,
                                  std::atomic<bool> *               cancel,
-                                 std::vector<std::vector<float>> & tracks_out);
+                                 std::vector<std::vector<float>> & tracks_out,
+                                 std::vector<std::string> *        codes_out);
 
 // Autoregressive stage only: lm_batch_size code streams out, no
 // synthesis. codes_out[i] is the audio_codes string of song i (8 comma

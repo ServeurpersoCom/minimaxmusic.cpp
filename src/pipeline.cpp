@@ -168,14 +168,14 @@ bool pipeline_ensure_lm(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3P
 static bool ensure_synth_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
     bool ok = ensure_component(
         "Cond", p->loaded.cond, paths.cond,
-                   [&] {
-                       if (!p->cond_enc.load(paths.cond.c_str())) {
-                           return false;
-                       }
-                       p->cond_enc.clamp_fp16 = params.clamp_fp16;
-                       return true;
-                   },
-                   [&] { p->cond_enc.free(); });
+        [&] {
+            if (!p->cond_enc.load(paths.cond.c_str())) {
+                return false;
+            }
+            p->cond_enc.clamp_fp16 = params.clamp_fp16;
+            return true;
+        },
+        [&] { p->cond_enc.free(); });
     ok = ok && ensure_component(
                    "DiT", p->loaded.dit, paths.dit,
                    [&] {
@@ -405,8 +405,8 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     // shapes, hot CUDA graphs); only its accumulation stops.
     std::vector<int>  frames(N, 0);
     std::vector<bool> done(N, false);
-    std::vector<int>                sampled(N);
-    std::vector<int>                kv_sets(2 * N);
+    std::vector<int>  sampled(N);
+    std::vector<int>  kv_sets(2 * N);
     for (int s = 0; s < 2 * N; s++) {
         kv_sets[s] = s;
     }
@@ -585,7 +585,8 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
 PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  const MM3Request &                req,
                                  std::atomic<bool> *               cancel,
-                                 std::vector<std::vector<float>> & tracks_out) {
+                                 std::vector<std::vector<float>> & tracks_out,
+                                 std::vector<std::string> *        codes_out) {
     Timer total_timer;
 
     int N = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
@@ -614,12 +615,21 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
             int shape[3] = { n_frames[0], 8, H };
             debug_dump(&p->dumper, "frame_hiddens", frame_hiddens[0].data(), shape, 3);
         }
+        if (codes_out) {
+            codes_out->assign(1, req.audio_codes);
+        }
     } else {
         frame_hiddens.resize(N);
         std::vector<std::vector<int>> codes(N);
         PipelineStatus                st = ar_stage(p, req, cancel, N, &frame_hiddens, codes, n_frames);
         if (st != PIPELINE_OK) {
             return st;
+        }
+        if (codes_out) {
+            codes_out->resize(N);
+            for (int i = 0; i < N; i++) {
+                (*codes_out)[i] = codes_serialize(codes[i]);
+            }
         }
     }
 

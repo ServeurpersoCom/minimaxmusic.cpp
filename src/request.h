@@ -82,3 +82,8 @@ void request_resolve_seed(MM3Request * r);
 
 // Resolve LM seed: if negative, replace with a hardware random value.
 void request_resolve_lm_seed(MM3Request * r);
+
+// Sparse replay request for one rendered track: the base request with
+// audio_codes set, the DiT seed offset by the variation index, and the
+// batch sizes reset. Running it reproduces that track deterministically.
+std::string request_replay_json(const MM3Request & base, const std::string & codes, int variation);

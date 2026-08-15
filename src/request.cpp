@@ -25,7 +25,7 @@ void request_init(MM3Request * r) {
     r->lm_batch_size    = 1;
     r->synth_batch_size = 1;
     r->audio_codes.clear();
-    r->dit_cfg          = 1.7f;
+    r->dit_cfg = 1.7f;
 
     r->peak_clip     = 10;
     r->output_format = OUTPUT_FORMAT_MP3;
@@ -194,4 +194,13 @@ void request_resolve_lm_seed(MM3Request * r) {
     if (r->lm_seed < 0) {
         r->lm_seed = random_seed();
     }
+}
+
+std::string request_replay_json(const MM3Request & base, const std::string & codes, int variation) {
+    MM3Request r       = base;
+    r.audio_codes      = codes;
+    r.seed             = base.seed + variation;
+    r.lm_batch_size    = 1;
+    r.synth_batch_size = 1;
+    return request_to_json(&r, true);
 }

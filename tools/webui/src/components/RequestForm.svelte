@@ -4,7 +4,7 @@
 	import { RotateCcw, Download, FolderOpen, X } from '@lucide/svelte';
 	import { app, toast, setRequest } from '../lib/state.svelte.js';
 	import { example } from '../lib/example.js';
-	import { synthSubmit, pollJob, jobResultBlobs, cancelJob } from '../lib/api.js';
+	import { synthSubmit, pollJob, jobResultTracks, cancelJob } from '../lib/api.js';
 	import { putSong, getAllSongs, saveJob, loadJob, clearJob } from '../lib/db.js';
 	import { num, buildSparse, clearSection } from '../lib/fields.js';
 	import type { MM3Request, Song } from '../lib/types.js';
@@ -22,21 +22,22 @@
 	// shared tail of both the onMount resume and the generate path.
 	async function landJob(job: PendingJob) {
 		await pollJob(job.id);
-		const audios = await jobResultBlobs(job.id);
+		const tracks = await jobResultTracks(job.id);
 		clearJob();
-		const r = job.request;
-		// batch jobs land one card per track in song-major order
+		// batch jobs land one card per track in song-major order. The card
+		// keeps the track's replay request: audio_codes + exact seed.
 		const now = Date.now();
-		for (let i = 0; i < audios.length; i++) {
+		for (let i = 0; i < tracks.length; i++) {
+			const r = tracks[i].request;
 			const song: Song = {
-				name: audios.length > 1 ? `${job.name} ${i}` : job.name,
+				name: tracks.length > 1 ? `${job.name} ${i}` : job.name,
 				format: app.format,
 				created: now + i,
 				caption: r.caption || '',
 				seed: r.seed ?? 0,
 				duration: r.duration ?? 0,
 				request: r,
-				audio: audios[i]
+				audio: tracks[i].audio
 			};
 			song.id = await putSong(song);
 		}

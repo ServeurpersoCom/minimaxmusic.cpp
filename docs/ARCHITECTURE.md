@@ -701,31 +701,44 @@ in the vocoder GGUF (`encoder.*` tensors). The encode is deterministic:
 the posterior mean, no sampling and no flow.
 
 ```
-Usage: ./neural-codec --vae <gguf> --encode|--decode -i <input> [-o <output>] [options]
+Usage: ./neural-codec --vae <gguf> --encode|--decode -i <input> [-o <output>] [--q8|--q4]
 
 Required:
   --vae <path>            VAE GGUF file
   --encode | --decode     Encode audio to latent, or decode latent to audio
-  -i <path>               Input (WAV/MP3 for encode, .vae for decode)
+  -i <path>               Input (WAV/MP3 for encode, latent for decode)
 
 Output:
   -o <path>               Output file (auto-named if omitted)
+  --q8                    Quantize latent to int8 (~89.6 kbit/s)
+  --q4                    Quantize latent to int4 (~45.5 kbit/s)
   --format <fmt>          mp3, wav16, wav24, wav32 (default: wav16)
 
-Output naming: song.wav -> song.vae, song.vae -> song.wav
+Output naming: song.wav -> song.vae (f32) or song.nac8 (Q8) or song.nac4 (Q4)
+               song.vae -> song.wav
 
 Memory control:
   --vae-chunk <N>         Latent frames per tile (default: 689)
   --vae-overlap <N>       Overlap frames per side (default: 86)
 
-Latent format:
-  .vae: flat [T, 128] f32, no header. 86.13 Hz, ~353 kbit/s.
+Latent formats (decode auto-detects):
+  .vae:  flat [T, 128] f32, no header. ~353 kbit/s.
+  .nac8: header + per-frame Q8. ~89.6 kbit/s.
+  .nac4: header + per-frame Q4. ~45.5 kbit/s.
 ```
 
 The `.vae` file is the raw latent, frame-major, one 128 channel f32 frame
 per latent step (512 bytes, x512 audio samples). The pipeline `--dump`
 latents carry the same payload behind a 12 byte debug header (i32 ndims +
 shape); stripping the header yields a valid `.vae`.
+
+The `.nac8` and `.nac4` files are the reduced-bitrate codec formats:
+an 8 byte header (4 byte magic `NAC8`/`NAC4` + uint32 frame count),
+then one record per frame. Quantization is symmetric per frame: the
+scale is the frame absmax over 127 (Q8) or 7 (Q4), stored as f16, the
+values as int8 (130 byte frame) or signed nibbles packed two per byte,
+low channel in the low nibble (66 byte frame). Decode auto-detects the
+format from the magic, so the extension is a convention, not a contract.
 
 Output is never normalized: the codec reproduces the decoder output
 exactly. A single-tile decode is bit-identical to the audio the pipeline
@@ -743,6 +756,10 @@ magnitude cosine on an official demo track; the residual is the
 intrinsic VAE reconstruction loss.
 
 ```bash
+# encode to the Q8 reduced-bitrate format, decode auto-detects it
+./neural-codec --vae models/MiniMax-Music3-vocoder-F32.gguf --encode --q8 -i song.wav
+./neural-codec --vae models/MiniMax-Music3-vocoder-F32.gguf --decode -i song.nac8
+
 # decode a dumped window latent
 ./neural-codec --vae models/MiniMax-Music3-vocoder-F32.gguf --decode -i song.vae -o song.wav
 

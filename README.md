@@ -178,8 +178,8 @@ same replayable request JSONs without synthesizing anything.
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full JSON
-reference and the `neural-codec` (flow VAE audio codec, encode and decode), `mp3-codec`
-and `quantize` tools.
+reference and the `neural-codec` (flow VAE audio codec, encode and decode, f32 and
+reduced-bitrate Q8/Q4 latent formats), `mp3-codec` and `quantize` tools.
 
 </details>
 

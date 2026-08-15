@@ -375,7 +375,7 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     std::vector<float> seqN((size_t) 2 * N * 2 * H), uN((size_t) N * NC);
     std::vector<int>   codesN((size_t) N * NC);
     std::vector<float> collectedN((size_t) N * NC * H);
-    std::vector<float> emb(H), feedback(H), depth_hid((size_t) 8 * H);
+    std::vector<float> embN((size_t) N * H), feedback(H), depth_hid((size_t) 8 * H);
     std::vector<float> depth_logits0(DepthDecoder::VOCAB), depth_logits1(DepthDecoder::VOCAB);
     std::vector<float> seq0, seq1;
     std::vector<float> batch_embeds((size_t) 2 * N * H);
@@ -408,13 +408,14 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
             // split path)
             std::uniform_real_distribution<float> uni(0.0f, 1.0f);
             for (int i = 0; i < N; i++) {
-                mm3_lm_embed_row(lm, sampled[i], emb.data());
+                float * emb_i = embN.data() + (size_t) i * H;
+                mm3_lm_embed_row(lm, sampled[i], emb_i);
                 memcpy(seqN.data() + (size_t) i * 2 * H, cur_hidden.data() + (size_t) i * H,
                        (size_t) H * sizeof(float));
-                memcpy(seqN.data() + ((size_t) i * 2 + 1) * H, emb.data(), (size_t) H * sizeof(float));
+                memcpy(seqN.data() + ((size_t) i * 2 + 1) * H, emb_i, (size_t) H * sizeof(float));
                 memcpy(seqN.data() + (size_t) (N + i) * 2 * H, cur_hidden.data() + (size_t) (N + i) * H,
                        (size_t) H * sizeof(float));
-                memcpy(seqN.data() + ((size_t) (N + i) * 2 + 1) * H, emb.data(), (size_t) H * sizeof(float));
+                memcpy(seqN.data() + ((size_t) (N + i) * 2 + 1) * H, emb_i, (size_t) H * sizeof(float));
                 for (int j = 0; j < NC; j++) {
                     uN[(size_t) i * NC + j] = uni(rng[i]);
                 }
@@ -426,11 +427,12 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
         } else {
             // Split reference path: per song, per stream, per step
             for (int i = 0; i < N; i++) {
-                mm3_lm_embed_row(lm, sampled[i], emb.data());
+                float * emb_i = embN.data() + (size_t) i * H;
+                mm3_lm_embed_row(lm, sampled[i], emb_i);
                 seq0.assign(cur_hidden.begin() + (size_t) i * H, cur_hidden.begin() + (size_t) (i + 1) * H);
                 seq1.assign(cur_hidden.begin() + (size_t) (N + i) * H, cur_hidden.begin() + (size_t) (N + i + 1) * H);
-                seq0.insert(seq0.end(), emb.begin(), emb.end());
-                seq1.insert(seq1.end(), emb.begin(), emb.end());
+                seq0.insert(seq0.end(), emb_i, emb_i + H);
+                seq1.insert(seq1.end(), emb_i, emb_i + H);
                 for (int cb = 1; cb < DepthDecoder::CODEBOOKS; cb++) {
                     int S = cb + 1;
                     depth->forward(seq0.data(), S, depth_hid.data(), depth_logits0.data());
@@ -487,10 +489,11 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
             }
         }
 
-        // Frame feedback per song: summed embeddings scaled by 8^-0.5,
-        // shared by the song's two CFG streams
+        // Frame feedback per song: the sampled embedding kept in embN plus
+        // the summed acoustic rows, scaled by 8^-0.5, shared by the song's
+        // two CFG streams
         for (int i = 0; i < N; i++) {
-            mm3_lm_embed_row(lm, sampled[i], feedback.data());
+            memcpy(feedback.data(), embN.data() + (size_t) i * H, (size_t) H * sizeof(float));
             for (int cb = 1; cb < DepthDecoder::CODEBOOKS; cb++) {
                 const float * row = depth->audio_embedding_row(cb, codesN[(size_t) i * NC + cb - 1]);
                 for (int j = 0; j < H; j++) {

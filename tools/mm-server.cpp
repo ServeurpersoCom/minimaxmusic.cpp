@@ -236,23 +236,43 @@ static const char * MULTIPART_BOUNDARY = "mm3-batch-boundary";
 static std::string multipart_build_tracks(const std::vector<std::string> & request_parts,
                                           const std::vector<std::string> & audio_parts,
                                           const char *                     audio_mime) {
-    std::string body;
+    // One set of literal fragments sizes the body exactly and builds it:
+    // audio parts weigh tens of MB, growing the string through repeated
+    // appends would reallocate and copy them
+    const char * dash       = "--";
+    const char * json_head  = "\r\nContent-Type: application/json\r\n\r\n";
+    const char * audio_head = "\r\nContent-Type: ";
+    const char * head_end   = "\r\n\r\n";
+    const char * crlf       = "\r\n";
+    const char * close_end  = "--\r\n";
+
+    const size_t boundary_len = strlen(MULTIPART_BOUNDARY);
+    const size_t per_track    = 2 * strlen(dash) + 2 * boundary_len + strlen(json_head) + 2 * strlen(crlf) +
+                             strlen(audio_head) + strlen(audio_mime) + strlen(head_end);
+    size_t total = strlen(dash) + boundary_len + strlen(close_end);
     for (size_t i = 0; i < audio_parts.size(); i++) {
-        body += "--";
-        body += MULTIPART_BOUNDARY;
-        body += "\r\nContent-Type: application/json\r\n\r\n";
-        body += request_parts[i];
-        body += "\r\n--";
-        body += MULTIPART_BOUNDARY;
-        body += "\r\nContent-Type: ";
-        body += audio_mime;
-        body += "\r\n\r\n";
-        body += audio_parts[i];
-        body += "\r\n";
+        total += per_track + request_parts[i].size() + audio_parts[i].size();
     }
-    body += "--";
+
+    std::string body;
+    body.reserve(total);
+    for (size_t i = 0; i < audio_parts.size(); i++) {
+        body += dash;
+        body += MULTIPART_BOUNDARY;
+        body += json_head;
+        body += request_parts[i];
+        body += crlf;
+        body += dash;
+        body += MULTIPART_BOUNDARY;
+        body += audio_head;
+        body += audio_mime;
+        body += head_end;
+        body += audio_parts[i];
+        body += crlf;
+    }
+    body += dash;
     body += MULTIPART_BOUNDARY;
-    body += "--\r\n";
+    body += close_end;
     return body;
 }
 

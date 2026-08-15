@@ -56,8 +56,8 @@ struct MM3Request {
     int mp3_bitrate;  // 128
 
     // model routing: GGUF filename per component, resolved against the
-    // server registry. Empty keeps the currently loaded model, or falls
-    // to the first registry entry.
+    // server registry. Empty keeps the previously requested model, or
+    // falls to the first registry entry.
     std::string lm_model;
     std::string depth_model;
     std::string cond_model;

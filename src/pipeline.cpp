@@ -90,36 +90,8 @@ static bool is_cancelled(std::atomic<bool> * cancel) {
     return cancel && cancel->load();
 }
 
-// Reload one component when its resolved path changed.
-// unload() must fully release the previous instance before load().
-template <typename LoadFn, typename UnloadFn>
-static bool ensure_component(const char *        tag,
-                             std::string &       loaded_path,
-                             const std::string & want,
-                             LoadFn              load,
-                             UnloadFn            unload) {
-    if (loaded_path == want) {
-        return true;
-    }
-    Timer timer;
-    if (!loaded_path.empty()) {
-        fprintf(stderr, "[Pipeline] %s: unload %s\n", tag, loaded_path.c_str());
-        unload();
-        loaded_path.clear();
-    }
-    if (!load()) {
-        fprintf(stderr, "[Pipeline] FATAL: %s load failed: %s\n", tag, want.c_str());
-        return false;
-    }
-    loaded_path = want;
-    fprintf(stderr, "[Pipeline] %s: %s, %.0f ms\n", tag, want.c_str(), timer.ms());
-    return true;
-}
-
-static bool ensure_ar_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
-static bool ensure_synth_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
-
-bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
+void pipeline_configure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
+    p->wanted = paths;
     p->params = params;
     debug_init(&p->dumper, params.dump_dir);
     if (params.clamp_fp16) {
@@ -128,69 +100,52 @@ bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3Pipe
     if (!params.use_fa) {
         fprintf(stderr, "[Pipeline] Flash attention disabled\n");
     }
-
-    return ensure_ar_components(p, paths, params) && ensure_synth_components(p, paths, params);
 }
 
-// The autoregressive pair: tokenizer travels with the LM GGUF
-static bool ensure_ar_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
-    bool ok = ensure_component(
-        "LM", p->loaded.lm, paths.lm,
-        [&] {
-            p->tok = BPETokenizer();
-            if (!load_bpe_from_gguf(&p->tok, paths.lm.c_str()) ||
-                !qw3lm_load(&p->lm, paths.lm.c_str(), params.max_seq,
-                            2 * (params.max_batch < 1 ? 1 : params.max_batch))) {
-                return false;
-            }
-            p->lm.use_flash_attn = p->lm.use_flash_attn && params.use_fa;
-            p->lm.clamp_fp16     = params.clamp_fp16;
-            return true;
-        },
-        [&] { qw3lm_free(&p->lm); });
-    return ok && ensure_component(
-                     "Depth", p->loaded.depth, paths.depth, [&] { return p->depth.load(paths.depth.c_str()); },
-                     [&] { p->depth.free(); });
-}
-
-bool pipeline_ensure_lm(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
-    p->params = params;
-    debug_init(&p->dumper, params.dump_dir);
-    if (params.clamp_fp16) {
-        fprintf(stderr, "[Pipeline] FP16 clamp enabled\n");
+// Require helpers: one place builds the store key of each component from
+// the wanted paths and the process-lifetime params, and applies the
+// runtime knobs after every require (idempotent on cache hits).
+static Qwen3LM * require_lm(MM3Pipeline * p) {
+    ModelKey k = { MODEL_LM, p->wanted.lm, p->params.max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch) };
+    Qwen3LM * m = store_require_lm(p->store, k);
+    if (m) {
+        if (!p->params.use_fa) {
+            m->use_flash_attn = false;
+        }
+        m->clamp_fp16 = p->params.clamp_fp16;
     }
-    if (!params.use_fa) {
-        fprintf(stderr, "[Pipeline] Flash attention disabled\n");
-    }
-    return ensure_ar_components(p, paths, params);
+    return m;
 }
 
-static bool ensure_synth_components(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params) {
-    bool ok = ensure_component(
-        "Cond", p->loaded.cond, paths.cond,
-        [&] {
-            if (!p->cond_enc.load(paths.cond.c_str())) {
-                return false;
-            }
-            p->cond_enc.clamp_fp16 = params.clamp_fp16;
-            return true;
-        },
-        [&] { p->cond_enc.free(); });
-    ok = ok && ensure_component(
-                   "DiT", p->loaded.dit, paths.dit,
-                   [&] {
-                       if (!p->dit.load(paths.dit.c_str())) {
-                           return false;
-                       }
-                       p->dit.use_flash_attn = p->dit.use_flash_attn && params.use_fa;
-                       p->dit.clamp_fp16     = params.clamp_fp16;
-                       return true;
-                   },
-                   [&] { p->dit.free(); });
-    ok = ok &&
-         ensure_component(
-             "VAE", p->loaded.vae, paths.vae, [&] { return p->vae.load(paths.vae.c_str()); }, [&] { p->vae.free(); });
-    return ok;
+static DepthDecoder * require_depth(MM3Pipeline * p) {
+    ModelKey k = { MODEL_DEPTH, p->wanted.depth, 0, 0 };
+    return store_require_depth(p->store, k);
+}
+
+static CondEnc * require_cond(MM3Pipeline * p) {
+    ModelKey  k = { MODEL_COND, p->wanted.cond, 0, 0 };
+    CondEnc * m = store_require_cond(p->store, k);
+    if (m) {
+        m->clamp_fp16 = p->params.clamp_fp16;
+    }
+    return m;
+}
+
+static DiT * require_dit(MM3Pipeline * p) {
+    ModelKey k = { MODEL_DIT, p->wanted.dit, 0, 0 };
+    DiT *    m = store_require_dit(p->store, k);
+    if (m) {
+        if (!p->params.use_fa) {
+            m->use_flash_attn = false;
+        }
+        m->clamp_fp16 = p->params.clamp_fp16;
+    }
+    return m;
+}
+
+static FlowVAE * require_vae(MM3Pipeline * p) {
+    ModelKey k = { MODEL_VAE, p->wanted.vae, 0, 0 };
+    return store_require_vae(p->store, k);
 }
 
 // Serialize a code stream to the audio_codes wire format: flat comma
@@ -241,6 +196,9 @@ static std::vector<int> codes_parse(const std::string & s) {
 // never depended on the CFG branch), the depth decoder runs one S=8
 // causal forward per frame, positions 1..7 reproducing the step hiddens.
 static PipelineStatus replay_stage(MM3Pipeline *        p,
+                                   Qwen3LM *            lm,
+                                   DepthDecoder *       depth,
+                                   BPETokenizer *       tok,
                                    const MM3Request &   req,
                                    std::atomic<bool> *  cancel,
                                    std::vector<float> & frame_hiddens) {
@@ -253,31 +211,31 @@ static PipelineStatus replay_stage(MM3Pipeline *        p,
     int n = (int) (codes.size() / 8) - 1;  // hidden frames: frame 0 only feeds the first LM feedback
 
     std::vector<int> cond_ids = mm3_build_prompt_ids(
-        [&](const std::string & str) { return bpe_encode(&p->tok, str, false); }, req.caption, req.lyrics);
+        [&](const std::string & str) { return bpe_encode(tok, str, false); }, req.caption, req.lyrics);
     fprintf(stderr, "[Prompt] %zu tokens\n", cond_ids.size());
 
-    const int H  = p->lm.cfg.hidden_size;
-    const int V  = p->lm.cfg.vocab_size;
+    const int H  = lm->cfg.hidden_size;
+    const int V  = lm->cfg.vocab_size;
     const int NC = DepthDecoder::CODEBOOKS - 1;
 
-    if (n > MAX_FRAMES || (int) cond_ids.size() + n >= p->lm.cfg.max_seq_len) {
+    if (n > MAX_FRAMES || (int) cond_ids.size() + n >= lm->cfg.max_seq_len) {
         fprintf(stderr, "[AR] FATAL: audio_codes carry %d frames, over the budget (prompt %zu tokens)\n", n,
                 cond_ids.size());
         return PIPELINE_FAILED;
     }
 
-    qw3lm_reset_kv(&p->lm, 0);
+    qw3lm_reset_kv(lm, 0);
     std::vector<float> logits(V);
-    qw3lm_forward(&p->lm, cond_ids.data(), (int) cond_ids.size(), 0, logits.data());
+    qw3lm_forward(lm, cond_ids.data(), (int) cond_ids.size(), 0, logits.data());
 
     // Feedback embeddings f_0 .. f_{n-1}, one full-sequence forward
     std::vector<float> embeds((size_t) n * H), emb(H);
     float              scale = 1.0f / sqrtf((float) DepthDecoder::CODEBOOKS);
     for (int t = 0; t < n; t++) {
         const int * f = codes.data() + (size_t) t * 8;
-        mm3_lm_embed_row(&p->lm, f[0] + MM3_AUDIO_CODE_OFFSET, emb.data());
+        mm3_lm_embed_row(lm, f[0] + MM3_AUDIO_CODE_OFFSET, emb.data());
         for (int cb = 1; cb <= NC; cb++) {
-            const float * row = p->depth.audio_embedding_row(cb, f[cb]);
+            const float * row = depth->audio_embedding_row(cb, f[cb]);
             for (int j = 0; j < H; j++) {
                 emb[j] += row[j];
             }
@@ -288,7 +246,7 @@ static PipelineStatus replay_stage(MM3Pipeline *        p,
         memcpy(embeds.data() + (size_t) t * H, emb.data(), (size_t) H * sizeof(float));
     }
     std::vector<float> all_hidden((size_t) n * H);
-    qw3lm_forward(&p->lm, nullptr, n, 0, logits.data(), embeds.data(), nullptr, all_hidden.data());
+    qw3lm_forward(lm, nullptr, n, 0, logits.data(), embeds.data(), nullptr, all_hidden.data());
 
     // Depth hiddens per frame: the whole step sequence is known upfront,
     // one causal S=8 forward reproduces the 7 step hiddens
@@ -302,12 +260,12 @@ static PipelineStatus replay_stage(MM3Pipeline *        p,
         const int *   f  = codes.data() + (size_t) k * 8;
         const float * hk = all_hidden.data() + (size_t) (k - 1) * H;
         memcpy(seq8.data(), hk, (size_t) H * sizeof(float));
-        mm3_lm_embed_row(&p->lm, f[0] + MM3_AUDIO_CODE_OFFSET, seq8.data() + H);
+        mm3_lm_embed_row(lm, f[0] + MM3_AUDIO_CODE_OFFSET, seq8.data() + H);
         for (int cb = 1; cb < NC; cb++) {
-            memcpy(seq8.data() + (size_t) (1 + cb) * H, p->depth.audio_embedding_row(cb, f[cb]),
+            memcpy(seq8.data() + (size_t) (1 + cb) * H, depth->audio_embedding_row(cb, f[cb]),
                    (size_t) H * sizeof(float));
         }
-        if (!p->depth.forward(seq8.data(), 8, hid8.data(), dlogits.data())) {
+        if (!depth->forward(seq8.data(), 8, hid8.data(), dlogits.data())) {
             return PIPELINE_FAILED;
         }
         frame_hiddens.insert(frame_hiddens.end(), hk, hk + H);
@@ -321,6 +279,9 @@ static PipelineStatus replay_stage(MM3Pipeline *        p,
 // Autoregressive stage: N songs sampled in one batched pass. Records
 // every song's code stream; hiddens_out is optional (null for mm-lm).
 static PipelineStatus ar_stage(MM3Pipeline *                     p,
+                               Qwen3LM *                         lm,
+                               DepthDecoder *                    depth,
+                               BPETokenizer *                    tok,
                                const MM3Request &                req,
                                std::atomic<bool> *               cancel,
                                int                               N,
@@ -328,16 +289,16 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
                                std::vector<std::vector<int>> &   codes_out,
                                std::vector<int> &                n_frames) {
     // Prompt pair, shared by every song in the batch
-    std::vector<int> cond_ids = mm3_build_prompt_ids(
-        [&](const std::string & s) { return bpe_encode(&p->tok, s, false); }, req.caption, req.lyrics);
+    std::vector<int> cond_ids =
+        mm3_build_prompt_ids([&](const std::string & s) { return bpe_encode(tok, s, false); }, req.caption, req.lyrics);
     std::vector<int> uncond_ids = cond_ids;
     for (size_t i = 1; i + 2 < uncond_ids.size(); i++) {
         uncond_ids[i] = MM3_AUDIO_CFG;
     }
     fprintf(stderr, "[Prompt] %zu tokens\n", cond_ids.size());
 
-    const int H  = p->lm.cfg.hidden_size;
-    const int V  = p->lm.cfg.vocab_size;
+    const int H  = lm->cfg.hidden_size;
+    const int V  = lm->cfg.vocab_size;
     const int NC = DepthDecoder::CODEBOOKS - 1;
 
     // Allowed semantic sampling ids: the semantic range plus the end token
@@ -362,18 +323,18 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     }
 
     for (int s = 0; s < 2 * N; s++) {
-        qw3lm_reset_kv(&p->lm, s);
+        qw3lm_reset_kv(lm, s);
     }
 
     // Shared prompt: one prefill per CFG branch, replicated to the other
     // songs by KV copy
     Timer              prefill_timer;
     std::vector<float> logits0(V), logits1(V), hidden0(H), hidden1(H);
-    qw3lm_forward(&p->lm, cond_ids.data(), (int) cond_ids.size(), 0, logits0.data(), nullptr, hidden0.data());
-    qw3lm_forward(&p->lm, uncond_ids.data(), (int) uncond_ids.size(), N, logits1.data(), nullptr, hidden1.data());
+    qw3lm_forward(lm, cond_ids.data(), (int) cond_ids.size(), 0, logits0.data(), nullptr, hidden0.data());
+    qw3lm_forward(lm, uncond_ids.data(), (int) uncond_ids.size(), N, logits1.data(), nullptr, hidden1.data());
     for (int i = 1; i < N; i++) {
-        qw3lm_copy_kv(&p->lm, 0, i);
-        qw3lm_copy_kv(&p->lm, N, N + i);
+        qw3lm_copy_kv(lm, 0, i);
+        qw3lm_copy_kv(lm, N, N + i);
     }
     fprintf(stderr, "[AR] Prefill %.0f ms, %zu tokens, CFG=%.2f, top_k=%d, songs=%d\n", prefill_timer.ms(),
             cond_ids.size(), req.lm_cfg, req.lm_top_k, N);
@@ -384,7 +345,7 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     if (max_frames > MAX_FRAMES) {
         max_frames = MAX_FRAMES;
     }
-    int kv_budget = p->lm.cfg.max_seq_len - (int) cond_ids.size() - 1;
+    int kv_budget = lm->cfg.max_seq_len - (int) cond_ids.size() - 1;
     if (max_frames > kv_budget) {
         fprintf(stderr, "[AR] Frame budget clamped to %d by the KV cache (prompt %zu tokens)\n", kv_budget,
                 cond_ids.size());
@@ -447,7 +408,7 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
             // split path)
             std::uniform_real_distribution<float> uni(0.0f, 1.0f);
             for (int i = 0; i < N; i++) {
-                mm3_lm_embed_row(&p->lm, sampled[i], emb.data());
+                mm3_lm_embed_row(lm, sampled[i], emb.data());
                 memcpy(seqN.data() + (size_t) i * 2 * H, cur_hidden.data() + (size_t) i * H,
                        (size_t) H * sizeof(float));
                 memcpy(seqN.data() + ((size_t) i * 2 + 1) * H, emb.data(), (size_t) H * sizeof(float));
@@ -458,29 +419,29 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
                     uN[(size_t) i * NC + j] = uni(rng[i]);
                 }
             }
-            if (!p->depth.forward_frame(seqN.data(), uN.data(), req.lm_cfg, req.lm_top_k, N, codesN.data(),
-                                        collectedN.data())) {
+            if (!depth->forward_frame(seqN.data(), uN.data(), req.lm_cfg, req.lm_top_k, N, codesN.data(),
+                                      collectedN.data())) {
                 return PIPELINE_FAILED;
             }
         } else {
             // Split reference path: per song, per stream, per step
             for (int i = 0; i < N; i++) {
-                mm3_lm_embed_row(&p->lm, sampled[i], emb.data());
+                mm3_lm_embed_row(lm, sampled[i], emb.data());
                 seq0.assign(cur_hidden.begin() + (size_t) i * H, cur_hidden.begin() + (size_t) (i + 1) * H);
                 seq1.assign(cur_hidden.begin() + (size_t) (N + i) * H, cur_hidden.begin() + (size_t) (N + i + 1) * H);
                 seq0.insert(seq0.end(), emb.begin(), emb.end());
                 seq1.insert(seq1.end(), emb.begin(), emb.end());
                 for (int cb = 1; cb < DepthDecoder::CODEBOOKS; cb++) {
                     int S = cb + 1;
-                    p->depth.forward(seq0.data(), S, depth_hid.data(), depth_logits0.data());
+                    depth->forward(seq0.data(), S, depth_hid.data(), depth_logits0.data());
                     memcpy(collectedN.data() + ((size_t) i * NC + cb - 1) * H, depth_hid.data() + (size_t) (S - 1) * H,
                            (size_t) H * sizeof(float));
-                    p->depth.forward(seq1.data(), S, depth_hid.data(), depth_logits1.data());
+                    depth->forward(seq1.data(), S, depth_hid.data(), depth_logits1.data());
                     int code = mm3_cfg_sample(depth_logits0.data(), depth_logits1.data(), depth_allowed, req.lm_cfg,
                                               req.lm_top_k, rng[i]);
                     codesN[(size_t) i * NC + cb - 1] = code;
                     if (cb < DepthDecoder::CODEBOOKS - 1) {
-                        const float * row = p->depth.audio_embedding_row(cb, code);
+                        const float * row = depth->audio_embedding_row(cb, code);
                         seq0.insert(seq0.end(), row, row + H);
                         seq1.insert(seq1.end(), row, row + H);
                     }
@@ -529,9 +490,9 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
         // Frame feedback per song: summed embeddings scaled by 8^-0.5,
         // shared by the song's two CFG streams
         for (int i = 0; i < N; i++) {
-            mm3_lm_embed_row(&p->lm, sampled[i], feedback.data());
+            mm3_lm_embed_row(lm, sampled[i], feedback.data());
             for (int cb = 1; cb < DepthDecoder::CODEBOOKS; cb++) {
-                const float * row = p->depth.audio_embedding_row(cb, codesN[(size_t) i * NC + cb - 1]);
+                const float * row = depth->audio_embedding_row(cb, codesN[(size_t) i * NC + cb - 1]);
                 for (int j = 0; j < H; j++) {
                     feedback[j] += row[j];
                 }
@@ -544,11 +505,11 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
             memcpy(batch_embeds.data() + (size_t) (N + i) * H, feedback.data(), (size_t) H * sizeof(float));
         }
         if (p->params.use_batch_cfg) {
-            qw3lm_forward_batch(&p->lm, nullptr, kv_sets.data(), 2 * N, cur_logits.data(), 0, 0, batch_embeds.data(),
+            qw3lm_forward_batch(lm, nullptr, kv_sets.data(), 2 * N, cur_logits.data(), 0, 0, batch_embeds.data(),
                                 cur_hidden.data());
         } else {
             for (int s = 0; s < 2 * N; s++) {
-                qw3lm_forward(&p->lm, nullptr, 1, s, cur_logits.data() + (size_t) s * V,
+                qw3lm_forward(lm, nullptr, 1, s, cur_logits.data() + (size_t) s * V,
                               batch_embeds.data() + (size_t) s * H, cur_hidden.data() + (size_t) s * H);
             }
         }
@@ -595,43 +556,82 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         return PIPELINE_FAILED;
     }
 
-    const int H = p->lm.cfg.hidden_size;
-
     std::vector<std::vector<float>> frame_hiddens;
     std::vector<int>                n_frames;
-    if (!req.audio_codes.empty()) {
-        // Teacher-forced replay: the codes replace the sampling
-        if (req.lm_batch_size > 1) {
-            fprintf(stderr, "[AR] audio_codes provided: lm_batch_size ignored\n");
+    int                             H = 0;
+
+    // AR group scope: the RAII handles release { LM, depth } before the
+    // synthesis group is required, so under STRICT the LM weights and
+    // the DiT weights never coexist
+    {
+        Qwen3LM * lm = require_lm(p);
+        if (!lm) {
+            return PIPELINE_FAILED;
         }
-        N = 1;
-        frame_hiddens.resize(1);
-        PipelineStatus st = replay_stage(p, req, cancel, frame_hiddens[0]);
-        if (st != PIPELINE_OK) {
-            return st;
+        ModelHandle    lm_h(p->store, lm);
+        DepthDecoder * depth = require_depth(p);
+        if (!depth) {
+            return PIPELINE_FAILED;
         }
-        n_frames.assign(1, (int) (frame_hiddens[0].size() / (8 * (size_t) H)));
-        if (p->dumper.enabled) {
-            int shape[3] = { n_frames[0], 8, H };
-            debug_dump(&p->dumper, "frame_hiddens", frame_hiddens[0].data(), shape, 3);
+        ModelHandle    depth_h(p->store, depth);
+        BPETokenizer * tok = store_bpe(p->store, p->wanted.lm.c_str());
+        if (!tok) {
+            return PIPELINE_FAILED;
         }
-        if (codes_out) {
-            codes_out->assign(1, req.audio_codes);
-        }
-    } else {
-        frame_hiddens.resize(N);
-        std::vector<std::vector<int>> codes(N);
-        PipelineStatus                st = ar_stage(p, req, cancel, N, &frame_hiddens, codes, n_frames);
-        if (st != PIPELINE_OK) {
-            return st;
-        }
-        if (codes_out) {
-            codes_out->resize(N);
-            for (int i = 0; i < N; i++) {
-                (*codes_out)[i] = codes_serialize(codes[i]);
+        H = lm->cfg.hidden_size;
+
+        if (!req.audio_codes.empty()) {
+            // Teacher-forced replay: the codes replace the sampling
+            if (req.lm_batch_size > 1) {
+                fprintf(stderr, "[AR] audio_codes provided: lm_batch_size ignored\n");
+            }
+            N = 1;
+            frame_hiddens.resize(1);
+            PipelineStatus st = replay_stage(p, lm, depth, tok, req, cancel, frame_hiddens[0]);
+            if (st != PIPELINE_OK) {
+                return st;
+            }
+            n_frames.assign(1, (int) (frame_hiddens[0].size() / (8 * (size_t) H)));
+            if (p->dumper.enabled) {
+                int shape[3] = { n_frames[0], 8, H };
+                debug_dump(&p->dumper, "frame_hiddens", frame_hiddens[0].data(), shape, 3);
+            }
+            if (codes_out) {
+                codes_out->assign(1, req.audio_codes);
+            }
+        } else {
+            frame_hiddens.resize(N);
+            std::vector<std::vector<int>> codes(N);
+            PipelineStatus st = ar_stage(p, lm, depth, tok, req, cancel, N, &frame_hiddens, codes, n_frames);
+            if (st != PIPELINE_OK) {
+                return st;
+            }
+            if (codes_out) {
+                codes_out->resize(N);
+                for (int i = 0; i < N; i++) {
+                    (*codes_out)[i] = codes_serialize(codes[i]);
+                }
             }
         }
     }
+
+    // Synthesis group: { cond, DiT, VAE } interleave per window and per
+    // song, so the three handles live across the whole song loop
+    CondEnc * cond_enc = require_cond(p);
+    if (!cond_enc) {
+        return PIPELINE_FAILED;
+    }
+    ModelHandle cond_h(p->store, cond_enc);
+    DiT *       dit = require_dit(p);
+    if (!dit) {
+        return PIPELINE_FAILED;
+    }
+    ModelHandle dit_h(p->store, dit);
+    FlowVAE *   vae = require_vae(p);
+    if (!vae) {
+        return PIPELINE_FAILED;
+    }
+    ModelHandle vae_h(p->store, vae);
 
     // Windowed flow matching and decode: per song, M noise variations
     // batched in the DiT on the shared condition track (seeds seed + j)
@@ -679,7 +679,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
             std::vector<float> window(frame_hiddens[song].begin() + (size_t) start * 8 * H,
                                       frame_hiddens[song].begin() + (size_t) end * 8 * H);
             int                T_lat = 0;
-            p->cond_enc.encode(window, end - start, cond_track, T_lat);
+            cond_enc->encode(window, end - start, cond_track, T_lat);
             chunk_lat[k] = T_lat;
 
             int overlap = 0;
@@ -742,9 +742,9 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                         memcpy(xt2.data() + (size_t) j * lat_sz, xt[j].data(), lat_sz * sizeof(float));
                         memcpy(xt2.data() + (size_t) (M + j) * lat_sz, xt[j].data(), lat_sz * sizeof(float));
                     }
-                    p->dit.forward(xt2.data(), cond2.data(), T_lat, 2 * M, t, v2.data());
+                    dit->forward(xt2.data(), cond2.data(), T_lat, 2 * M, t, v2.data());
                     if (dump_win && i == 0) {
-                        p->dit.dump_named(&p->dumper);
+                        dit->dump_named(&p->dumper);
                     }
                     for (int j = 0; j < M; j++) {
                         const float * vc = v2.data() + (size_t) j * lat_sz;
@@ -763,11 +763,11 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                     }
                 } else {
                     for (int j = 0; j < M; j++) {
-                        p->dit.forward(xt[j].data(), cond_track.data(), T_lat, 1, t, v_cond.data());
+                        dit->forward(xt[j].data(), cond_track.data(), T_lat, 1, t, v_cond.data());
                         if (dump_win && j == 0 && i == 0) {
-                            p->dit.dump_named(&p->dumper);
+                            dit->dump_named(&p->dumper);
                         }
-                        p->dit.forward(xt[j].data(), zeros_track.data(), T_lat, 1, t, v_uncond.data());
+                        dit->forward(xt[j].data(), zeros_track.data(), T_lat, 1, t, v_uncond.data());
                         for (size_t e = 0; e < lat_sz; e++) {
                             float v = v_uncond[e] + (v_cond[e] - v_uncond[e]) * req.dit_cfg;
                             if (dump_win && j == 0) {
@@ -838,7 +838,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                     }
                 }
                 std::vector<float> wav;
-                if (!p->vae.decode(chan, T_lat, wav)) {
+                if (!vae->decode(chan, T_lat, wav)) {
                     return PIPELINE_FAILED;
                 }
                 int left  = (k == 0) ? 0 : CROP_LEFT * HOP;
@@ -880,9 +880,24 @@ PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
         return PIPELINE_FAILED;
     }
 
+    Qwen3LM * lm = require_lm(p);
+    if (!lm) {
+        return PIPELINE_FAILED;
+    }
+    ModelHandle    lm_h(p->store, lm);
+    DepthDecoder * depth = require_depth(p);
+    if (!depth) {
+        return PIPELINE_FAILED;
+    }
+    ModelHandle    depth_h(p->store, depth);
+    BPETokenizer * tok = store_bpe(p->store, p->wanted.lm.c_str());
+    if (!tok) {
+        return PIPELINE_FAILED;
+    }
+
     std::vector<std::vector<int>> codes(N);
     std::vector<int>              n_frames;
-    PipelineStatus                st = ar_stage(p, req, cancel, N, nullptr, codes, n_frames);
+    PipelineStatus                st = ar_stage(p, lm, depth, tok, req, cancel, N, nullptr, codes, n_frames);
     if (st != PIPELINE_OK) {
         return st;
     }

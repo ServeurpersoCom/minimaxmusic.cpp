@@ -160,10 +160,12 @@ int main(int argc, char ** argv) {
     paths.dit   = resolve_model(reg.dit, req.dit_model, "dit");
     paths.vae   = resolve_model(reg.vae, req.vae_model, "vae");
 
-    MM3Pipeline pipeline;
-    if (!pipeline_ensure(&pipeline, paths, params)) {
-        return 1;
-    }
+    // Model loads go through the store in STRICT policy: at most one
+    // coexistence group resident, the LM and the DiT never overlap.
+    ModelStore * store = store_create(EVICT_STRICT);
+    MM3Pipeline  pipeline;
+    pipeline.store = store;
+    pipeline_configure(&pipeline, paths, params);
 
     bool      output_wav = false;
     WavFormat wav_fmt    = WAV_S16;
@@ -220,5 +222,6 @@ int main(int argc, char ** argv) {
         fclose(jf);
         fprintf(stderr, "[Out] %s\n", json_path.c_str());
     }
+    store_free(store);
     return 0;
 }

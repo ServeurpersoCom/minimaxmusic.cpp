@@ -110,12 +110,12 @@ else()
 endif()
 
 # mm-synth: full pipeline (LM + depth + cond + dit + vae + wav)
-add_executable(mm-synth tools/mm-synth.cpp src/pipeline.cpp src/request.cpp)
+add_executable(mm-synth tools/mm-synth.cpp src/pipeline.cpp src/model-store.cpp src/request.cpp)
 target_link_libraries(mm-synth PRIVATE yyjson)
 link_ggml_backends(mm-synth)
 
 # mm-lm: hybrid LM inference (global LM + RVQ depth decoder)
-add_executable(mm-lm tools/mm-lm.cpp src/pipeline.cpp src/request.cpp)
+add_executable(mm-lm tools/mm-lm.cpp src/pipeline.cpp src/model-store.cpp src/request.cpp)
 target_link_libraries(mm-lm PRIVATE yyjson)
 link_ggml_backends(mm-lm)
 
@@ -133,7 +133,7 @@ add_custom_command(
 set_source_files_properties(${WEBUI_OUTPUT} PROPERTIES GENERATED TRUE)
 
 # mm-server: HTTP server (async job queue + embedded webui)
-add_executable(mm-server tools/mm-server.cpp src/pipeline.cpp src/request.cpp ${WEBUI_OUTPUT})
+add_executable(mm-server tools/mm-server.cpp src/pipeline.cpp src/model-store.cpp src/request.cpp ${WEBUI_OUTPUT})
 target_include_directories(mm-server PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 target_link_libraries(mm-server PRIVATE yyjson httplib)
 link_ggml_backends(mm-server)

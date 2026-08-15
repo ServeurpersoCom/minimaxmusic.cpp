@@ -93,9 +93,11 @@ Open http://localhost:8086 in your browser. The WebUI handles everything:
 write a structured caption, set lyrics and duration, generate, play, and
 download tracks.
 
-Models are loaded on the first job (zero GPU at startup) and hot-swapped
-per component when you pick a different one in the UI: switching one
-quant reloads only that model, the other four stay resident.
+Models are loaded on the first job (zero GPU at startup). By default the
+server runs the strict VRAM policy: the LM stage and the synthesis stage
+swap in and out per job, so the LM and the DiT never coexist. Pass
+`--keep-loaded` to keep every model resident instead; switching one quant
+in the UI then loads only that model, the others stay warm.
 
 ## Server options
 

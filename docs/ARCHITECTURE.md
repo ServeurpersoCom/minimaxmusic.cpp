@@ -134,23 +134,38 @@ or single safetensors of each component subfolder and writes to `models/`.
 
 ## VRAM and model routing
 
-All five modules load together and stay resident: the working set is
-interleaved per frame (LM + depth decoder) then per window (condition
-encoder + DiT + VAE), so nothing is evictable mid-request. There is no
-module store or eviction policy; the memory knob is quantization.
+Module loads go through a `ModelStore` (`src/model-store.h`), the single
+owner of the GGML module instances. The pipeline borrows modules through
+refcounted RAII handles (`ModelHandle`), stage by stage, and the store
+decides what stays in VRAM following its eviction policy:
 
-| Combo | LM | Depth | DiT | Weights resident |
-|-------|----|-------|-----|------------------|
-| Full native | BF16 | BF16 | F32 | ~29 GB |
-| Q8_0 | Q8_0 | Q8_0 | Q8_0 | ~13 GB |
-| Light | Q5_K_M | Q8_0 | Q4_K_M | ~9 GB |
+- `EVICT_STRICT` (default, hardcoded in the CLIs): at most one
+  coexistence group resident at a time. The AR group `{ LM, depth }` is
+  interleaved per frame, the synthesis group `{ cond, DiT, VAE }` per
+  window and per song, so eviction operates on groups: when the
+  synthesis group is required, the AR group has been released and is
+  unloaded. The LM weights and the DiT weights never coexist, peak VRAM
+  is the AR group.
+- `EVICT_NEVER` (`mm-server --keep-loaded`): nothing is ever evicted,
+  modules accumulate. Swapping a quant under this policy keeps both
+  instances resident; the user opting in declares the budget for it.
 
-`pipeline_ensure()` is the loading primitive, shared by `mm-synth` and
-`mm-server`. It compares the resolved GGUF path of each component against
-the loaded set and reloads only the components whose path changed:
-switching the DiT quant in the UI reloads the DiT alone, the other four
-modules stay in VRAM. A failed load leaves the component path empty so the
-next call retries it.
+A require of an already resident key is a cache hit on the same
+instance. A conflicting require while a module of another group is still
+held aborts: the strict invariant is enforced, not documented.
+
+| Combo | LM | Depth | DiT | STRICT peak | Resident (`--keep-loaded`) |
+|-------|----|-------|-----|-------------|----------------------------|
+| Full native | BF16 | BF16 | F32 | ~19 GB | ~29 GB |
+| Q8_0 | Q8_0 | Q8_0 | Q8_0 | ~10 GB | ~13 GB |
+| Light | Q5_K_M | Q8_0 | Q4_K_M | ~7 GB | ~9 GB |
+
+`pipeline_configure()` records the resolved GGUF path of each component;
+the loads happen inside `pipeline_generate()` at stage boundaries,
+through the store. Under `--keep-loaded`, switching the DiT quant in the
+UI loads the new DiT and hits the cache for the other four modules; under
+STRICT every job reloads each stage as it reaches it. A failed load
+surfaces as a failed job and the next job retries it.
 
 Model routing is a property of the request, not of the command line. The
 `MM3Request` carries one optional GGUF filename per component (`lm_model`,
@@ -158,10 +173,10 @@ Model routing is a property of the request, not of the command line. The
 the registry scanned from `--models <dir>` at startup. The registry
 classifies each GGUF by its embedded `general.architecture` metadata into
 the five buckets, so file names are free. An empty field keeps the
-currently loaded model, or falls to the first bucket entry (alphabetical:
-the native variant with the official names) when nothing is loaded yet,
-so a request without model fields never forces a reload. Unknown names
-get a 400 from the server and a FATAL from the CLI.
+previously requested model, or falls to the first bucket entry
+(alphabetical: the native variant with the official names) on the first
+job, so a request without model fields never forces a swap. Unknown
+names get a 400 from the server and a FATAL from the CLI.
 
 ## Pipeline
 
@@ -487,8 +502,8 @@ MP3 encoder bitrate in kbps. WAV outputs ignore it.
 **`lm_model`**, **`depth_model`**, **`cond_model`**, **`dit_model`**,
 **`vae_model`** (string, default `""`)
 GGUF filename per component, resolved against the `--models` registry.
-Empty keeps the currently loaded model, or falls to the first registry
-entry. Unknown names get a 400 from the server, a FATAL from the CLI. See
+Empty keeps the previously requested model, or falls to the first
+registry entry. Unknown names get a 400 from the server, a FATAL from the CLI. See
 [VRAM and model routing](#vram-and-model-routing).
 
 ## mm-lm reference
@@ -603,6 +618,7 @@ Server:
   --port <N>             Listen port (default: 8086)
   --max-batch <N>        LM batch limit (default: 1)
   --max-seq <N>          LM KV cache size (default: model context)
+  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)
 
 Debug:
   --no-fa                Disable flash attention

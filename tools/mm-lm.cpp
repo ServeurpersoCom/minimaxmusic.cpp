@@ -182,16 +182,22 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    MM3Pipeline pipeline;
-    if (!pipeline_ensure_lm(&pipeline, paths, params)) {
-        return 1;
-    }
+    // Model loads go through the store in STRICT policy; only the AR
+    // group { LM, depth } is ever required here.
+    ModelStore * store = store_create(EVICT_STRICT);
+    MM3Pipeline  pipeline;
+    pipeline.store = store;
+    pipeline_configure(&pipeline, paths, params);
 
     if (!dump_tokens_path.empty()) {
-        std::vector<int> ids = mm3_build_prompt_ids(
-            [&](const std::string & s) { return bpe_encode(&pipeline.tok, s, false); }, req.caption, req.lyrics);
-        std::string csv;
-        char        buf[16];
+        BPETokenizer * tok = store_bpe(store, paths.lm.c_str());
+        if (!tok) {
+            return 1;
+        }
+        std::vector<int> ids = mm3_build_prompt_ids([&](const std::string & s) { return bpe_encode(tok, s, false); },
+                                                    req.caption, req.lyrics);
+        std::string      csv;
+        char             buf[16];
         for (size_t i = 0; i < ids.size(); i++) {
             snprintf(buf, sizeof(buf), i ? ",%d" : "%d", ids[i]);
             csv += buf;
@@ -222,5 +228,6 @@ int main(int argc, char ** argv) {
         }
         fprintf(stderr, "[Out] %s\n", path.c_str());
     }
+    store_free(store);
     return 0;
 }

@@ -1,34 +1,33 @@
 #pragma once
 // pipeline.h: MiniMax Music 3 generation pipeline
 //
-// Owns the five GGML modules plus the tokenizer, all resident together
-// (~24 GB at BF16). Load once, generate many times. The full working
-// set is interleaved per frame (LM + depth) then per window (cond + DiT
-// + VAE), so nothing is evictable mid-request.
+// The pipeline owns no GGML module: it borrows them from a ModelStore
+// through RAII handles, stage by stage. The AR stage holds { LM, depth },
+// the synthesis stage holds { cond, DiT, VAE }; under the default STRICT
+// policy the store unloads a stage's modules when its handles go out of
+// scope, so the LM weights and the DiT weights never coexist. See the
+// VRAM policy doctrine in model-store.h.
 //
-// pipeline_ensure() reloads only the components whose path changed since
-// the previous job, so switching one quantization in the UI does not
-// reload the other four modules.
+// pipeline_configure() records the resolved paths and parameters; loads
+// happen inside generate at stage boundaries, through the store. A path
+// unchanged since the previous job is a store cache hit under
+// --keep-loaded, a reload under STRICT.
 //
 // generate() is synchronous and cancellable: the cancel flag is polled
 // between AR frames, between DiT steps, and between VAE windows.
 
-#include "bpe.h"
-#include "cond-enc.h"
 #include "debug.h"
-#include "depth-decoder.h"
-#include "dit.h"
-#include "qwen3-lm.h"
+#include "model-store.h"
 #include "request.h"
-#include "vae.h"
 
 #include <atomic>
 #include <string>
 #include <vector>
 
 // Runtime knobs mirroring the ace-synth debug surface. Applied to the
-// components as they load, so they must be set before the first ensure
-// and stay fixed for the process lifetime (graph caches bake them in).
+// components as they load, so they must be set before the first
+// configure and stay fixed for the process lifetime (graph caches and
+// store keys bake them in).
 struct MM3PipelineParams {
     bool         use_fa        = true;     // flash attention on GPU backends
     bool         use_batch_cfg = true;     // fuse the cond and uncond CFG streams in one LM decode
@@ -48,13 +47,8 @@ struct MM3ModelPaths {
 };
 
 struct MM3Pipeline {
-    BPETokenizer      tok;
-    Qwen3LM           lm;
-    DepthDecoder      depth;
-    CondEnc           cond_enc;
-    DiT               dit;
-    FlowVAE           vae;
-    MM3ModelPaths     loaded;  // empty strings until the first ensure
+    ModelStore *      store = nullptr;  // borrowed, owned by the tool
+    MM3ModelPaths     wanted;           // empty strings until the first configure
     MM3PipelineParams params;
     DebugDumper       dumper = {};
 };
@@ -65,15 +59,10 @@ enum PipelineStatus {
     PIPELINE_CANCELLED = 2,
 };
 
-// Load or reload the modules whose path differs from the loaded set,
-// applying params to each component as it loads.
-// Returns false on any load failure; the failed component path stays
-// empty so the next call retries it.
-bool pipeline_ensure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
-
-// Load only the autoregressive stage (LM + depth decoder), for mm-lm.
-// Same reload semantics as pipeline_ensure; the other paths are ignored.
-bool pipeline_ensure_lm(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
+// Record the resolved paths and parameters for the next generate. No
+// module is loaded here; a load failure surfaces as PIPELINE_FAILED
+// from the generate that first requires the failing component.
+void pipeline_configure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
 
 // Full text to audio generation. Seeds must be resolved by the caller
 // (request_resolve_seed / request_resolve_lm_seed).
@@ -91,7 +80,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
 
 // Autoregressive stage only: lm_batch_size code streams out, no
 // synthesis. codes_out[i] is the audio_codes string of song i (8 comma
-// separated codes per frame). Needs pipeline_ensure_lm at minimum.
+// separated codes per frame). Only requires the AR group from the store.
 PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
                                     const MM3Request &         req,
                                     std::atomic<bool> *        cancel,

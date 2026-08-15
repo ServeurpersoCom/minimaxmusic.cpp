@@ -12,11 +12,11 @@
 // Running jobs are never evicted.
 //
 // Models are discovered by scanning the --models directory at startup
-// (reads GGUF metadata only, no weights loaded). The pipeline loads all
-// five modules on the first job and keeps them resident (~24 GB): the
-// working set is interleaved per frame and per window, nothing is
-// evictable mid-request. GPU access is serialized by the single worker
-// thread (no mutex needed).
+// (reads GGUF metadata only, no weights loaded). Module loads go
+// through a ModelStore: STRICT by default (at most one coexistence
+// group resident, the LM and the DiT never overlap), or resident
+// forever with --keep-loaded. See the doctrine in model-store.h. GPU
+// access is serialized by the single worker thread (no mutex needed).
 
 #include "audio-io.h"
 #include "model-registry.h"
@@ -157,12 +157,13 @@ static void worker_main() {
     }
 }
 
-// pipeline: all five modules resident after the first job.
-// only the worker thread touches it. pipeline_ensure reloads a component
-// when its resolved path changes and retries after a failed load.
+// pipeline: borrows its modules from the store stage by stage.
+// only the worker thread touches it. pipeline_configure records the
+// resolved paths; loads and evictions happen inside generate.
 static MM3Pipeline       g_pipeline;
 static MM3PipelineParams g_params;
 static std::string       g_models_dir;
+static bool              g_keep_loaded = false;
 
 // model registry (populated at startup from GGUF metadata)
 static ModelRegistry g_registry;
@@ -215,11 +216,11 @@ static bool validate_models(const MM3Request & r) {
     return true;
 }
 
-// resolve all five components against the loaded set. worker thread only
-// (reads g_pipeline.loaded), called at job start so queued jobs follow
-// the models left resident by the previous job.
+// resolve all five components against the wanted set. worker thread only
+// (reads g_pipeline.wanted), called at job start so queued jobs follow
+// the models requested by the previous job.
 static void resolve_paths(const MM3Request & r, MM3ModelPaths & paths) {
-    const MM3ModelPaths & l = g_pipeline.loaded;
+    const MM3ModelPaths & l = g_pipeline.wanted;
     paths.lm                = resolve_model(g_registry.lm, r.lm_model, l.lm);
     paths.depth             = resolve_model(g_registry.depth, r.depth_model, l.depth);
     paths.cond              = resolve_model(g_registry.cond, r.cond_model, l.cond);
@@ -582,10 +583,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         active_job_set(job);
         MM3ModelPaths paths;
         resolve_paths(r, paths);
-        if (!pipeline_ensure(&g_pipeline, paths, g_params)) {
-            job->status.store(JobStatus::FAILED);
-            return;
-        }
+        pipeline_configure(&g_pipeline, paths, g_params);
         fprintf(stderr, "[Server] Job %s: %s\n", job->id.c_str(), request_to_json(&r).c_str());
 
         std::vector<std::vector<float>> tracks;
@@ -688,6 +686,7 @@ static void print_usage(const char * argv0) {
             "  --port <N>             Listen port (default: 8086)\n"
             "  --max-batch <N>        LM batch limit (default: 1)\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
+            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)\n"
             "\n"
             "Debug:\n"
             "  --no-fa                Disable flash attention\n"
@@ -720,6 +719,8 @@ int main(int argc, char ** argv) {
             }
         } else if (strcmp(argv[i], "--max-seq") == 0 && i + 1 < argc) {
             g_params.max_seq = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--keep-loaded") == 0) {
+            g_keep_loaded = true;
         } else if (strcmp(argv[i], "--no-fa") == 0) {
             g_params.use_fa = false;
         } else if (strcmp(argv[i], "--no-batch-cfg") == 0) {
@@ -741,6 +742,8 @@ int main(int argc, char ** argv) {
     }
 
     LogCapture log_capture;
+
+    g_pipeline.store = store_create(g_keep_loaded ? EVICT_NEVER : EVICT_STRICT);
 
     registry_scan(&g_registry, g_models_dir.c_str());
     if (!g_registry.lm.empty()) {
@@ -865,6 +868,7 @@ int main(int argc, char ** argv) {
     cv_work.notify_one();
     worker.join();
 
+    store_free(g_pipeline.store);
     fprintf(stderr, "[Server] Done\n");
     return 0;
 }

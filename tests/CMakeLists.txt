@@ -24,3 +24,7 @@ link_ggml_backends(test-depth)
 # test-lm: global LM parity harness against the transformers reference.
 add_executable(test-lm test-lm.cpp)
 link_ggml_backends(test-lm)
+
+# test-model-store: eviction policy and refcount invariants of the store.
+add_executable(test-model-store test-model-store.cpp ${CMAKE_SOURCE_DIR}/src/model-store.cpp)
+link_ggml_backends(test-model-store)

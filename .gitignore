@@ -8,3 +8,5 @@ models/*.gguf
 __pycache__/
 node_modules/
 tools/webui/dist/
+training/datasets/
+training/checkpoints/

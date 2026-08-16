@@ -39,7 +39,7 @@ class RVQEncoder(nn.Module):
         self.conv_in = nn.Conv1d(LATENT_CHANNELS, d_model, 7, padding=3)
         self.blocks  = nn.ModuleList(ResBlock(d_model, dil) for dil in DILATIONS)
         self.pos     = nn.Parameter(torch.zeros(1, FRAMES_PER_WIN, d_model))
-        layer = nn.TransformerEncoderLayer(d_model, n_heads, d_model * ff_mult, dropout=0.0,
+        layer = nn.TransformerEncoderLayer(d_model, n_heads, d_model * ff_mult, dropout=0.1,
                                            activation="gelu", batch_first=True, norm_first=True)
         self.transformer = nn.TransformerEncoder(layer, n_layers)
         self.norm_out    = nn.LayerNorm(d_model)

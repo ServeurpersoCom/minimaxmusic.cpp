@@ -17,7 +17,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 
-from dataset import VAE_EXT, CorpusDataset
+from dataset import VAE_EXT, CorpusDataset, RandomCropDataset
 from model import ACOUSTIC_HEADS, RVQEncoder
 
 DATASETS_DIR      = os.path.join(os.path.dirname(__file__), "datasets")
@@ -90,7 +90,7 @@ def main():
     os.makedirs(ckpt_dir, exist_ok=True)
 
     train_bases, val_bases = split_bases(corpus_dir)
-    train_set = CorpusDataset(corpus_dir, train_bases)
+    train_set = RandomCropDataset(corpus_dir, train_bases)
     val_set   = CorpusDataset(corpus_dir, val_bases)
     print(f"[Data] {len(train_bases)} train tracks ({len(train_set)} windows), "
           f"{len(val_bases)} val tracks ({len(val_set)} windows)")

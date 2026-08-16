@@ -99,12 +99,27 @@ class CorpusDataset(Dataset):
 
     def __getitem__(self, i):
         vae_path, codes, starts, t0 = self.windows[i]
-        bounds = starts[t0 : t0 + FRAMES_PER_WIN + 1] - starts[t0]
-        n_lat  = int(bounds[-1])
-        assert n_lat <= LATENT_WINDOW_MAX
-        latents = np.zeros((LATENT_WINDOW_MAX, LATENT_CHANNELS), dtype=np.float32)
-        latents[:n_lat] = np.fromfile(vae_path, dtype=np.float32, count=n_lat * LATENT_CHANNELS,
-                                      offset=int(starts[t0]) * LATENT_BYTES).reshape(n_lat, LATENT_CHANNELS)
-        target = codes[t0 + 1 : t0 + 1 + FRAMES_PER_WIN]
-        return (torch.from_numpy(latents), torch.from_numpy(pool_matrix(bounds)),
-                torch.from_numpy(target.copy()))
+        return build_sample(vae_path, codes, starts, t0)
+
+
+class RandomCropDataset(CorpusDataset):
+    # Training variant: same index length as the fixed windows for
+    # comparable epochs, but every draw picks a fresh random start frame
+    # inside its track. The corpus holds two orders of magnitude more
+    # distinct windows by shifting than the fixed 128-frame grid shows.
+    def __getitem__(self, i):
+        vae_path, codes, starts, _ = self.windows[i]
+        t0 = np.random.randint(0, len(starts) - FRAMES_PER_WIN)
+        return build_sample(vae_path, codes, starts, t0)
+
+
+def build_sample(vae_path: str, codes: np.ndarray, starts: np.ndarray, t0: int):
+    bounds = starts[t0 : t0 + FRAMES_PER_WIN + 1] - starts[t0]
+    n_lat  = int(bounds[-1])
+    assert n_lat <= LATENT_WINDOW_MAX
+    latents = np.zeros((LATENT_WINDOW_MAX, LATENT_CHANNELS), dtype=np.float32)
+    latents[:n_lat] = np.fromfile(vae_path, dtype=np.float32, count=n_lat * LATENT_CHANNELS,
+                                  offset=int(starts[t0]) * LATENT_BYTES).reshape(n_lat, LATENT_CHANNELS)
+    target = codes[t0 + 1 : t0 + 1 + FRAMES_PER_WIN]
+    return (torch.from_numpy(latents), torch.from_numpy(pool_matrix(bounds)),
+            torch.from_numpy(target.copy()))

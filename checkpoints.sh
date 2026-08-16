@@ -53,6 +53,8 @@ dl_weights "vocoder"
 dl_config "scheduler"
 dl_config "tokenizer"
 dl_file "dav.pth"
+dl_file "config.json"
+dl_file "modular_model_index.json"
 
 find "$DIR" -name '.cache' -type d -exec rm -rf {} + 2>/dev/null
 echo "[Done] Checkpoints ready in $DIR"

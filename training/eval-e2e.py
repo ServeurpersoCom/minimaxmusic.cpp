@@ -5,8 +5,11 @@
 # semantic, depth decoder greedy chain for the acoustics), replays the
 # codes through mm-synth (teacher-forced LM bypass), and scores the
 # render against the original audio with STFT magnitude cosine
-# similarity. The replay keeps the track's true first code frame as the
-# warm-up prefix: it renders no audio and the encoder never predicts it.
+# similarity. Every code the replay renders is predicted: the warm-up
+# prefix, which renders no audio, duplicates the predicted first frame,
+# and a final shifted window covers the frames left past the last whole
+# one. The frame count comes from the latent file, so the corpus codes
+# are never read.
 #
 # Runs on the training venv (torch + transformers + diffusers).
 #
@@ -22,7 +25,7 @@ import numpy as np
 import torch
 
 from dataset import (FRAMES_PER_WIN, H_DIM, HID_EXT, JSON_EXT, VAE_EXT, LATENT_CHANNELS,
-                     build_window, frame_latent_starts, load_codes)
+                     build_window, frame_latent_starts)
 from model import HiddenEncoder
 
 ROOT         = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -36,20 +39,41 @@ DTYPE        = torch.bfloat16
 SEM_OFF      = 151675
 SEM_N        = 16384
 AC_N         = 1024
+LATENTS_PER_WIN = 441
 STFT_WINDOW  = 2048
 STFT_HOP     = 512
 S16_SCALE    = 32768.0
 
 
+def track_frames(vae_path):
+    # Longest frame count whose stitched window starts stay inside the
+    # latent file
+    n_lat    = os.path.getsize(vae_path) // (LATENT_CHANNELS * 4)
+    n_frames = n_lat * FRAMES_PER_WIN // LATENTS_PER_WIN
+    while n_frames > 0 and frame_latent_starts(n_frames)[n_frames] > n_lat:
+        n_frames -= 1
+    return n_frames, frame_latent_starts(n_frames)
+
+
+def predict_window(model, vae_path, starts, t0):
+    latents, pool = build_window(vae_path, starts, t0)
+    return model(latents.unsqueeze(0).to(DEVICE), pool.unsqueeze(0).to(DEVICE))[0].float()
+
+
 def predict_h(model, vae_path, starts, n_frames):
     # Full-track h prediction over non-overlapping 128-frame windows on
-    # the stitched timeline
-    outs = []
+    # the stitched timeline, the remainder covered by a last window
+    # shifted back to end on the final frame
+    outs    = []
+    covered = 0
     with torch.no_grad():
-        for t0 in range(0, n_frames - FRAMES_PER_WIN + 1, FRAMES_PER_WIN):
-            latents, pool = build_window(vae_path, starts, t0)
-            outs.append(model(latents.unsqueeze(0).to(DEVICE), pool.unsqueeze(0).to(DEVICE))[0].float())
-    return torch.cat(outs, dim=0)  # [n, 4096]
+        while covered + FRAMES_PER_WIN <= n_frames:
+            outs.append(predict_window(model, vae_path, starts, covered))
+            covered += FRAMES_PER_WIN
+        if covered < n_frames:
+            t0 = n_frames - FRAMES_PER_WIN
+            outs.append(predict_window(model, vae_path, starts, t0)[covered - t0 :])
+    return torch.cat(outs, dim=0)  # [n_frames, 4096]
 
 
 def decode_codes(lm, depth, h):
@@ -99,14 +123,9 @@ def main():
 
     corpus   = os.path.join(DATASETS_DIR, args.dataset)
     vae_path = os.path.join(corpus, args.base + VAE_EXT)
-    codes    = torch.from_numpy(load_codes(os.path.join(corpus, args.base + JSON_EXT))).to(DEVICE)
     with open(os.path.join(corpus, args.base + JSON_EXT)) as f:
         request = json.load(f)
-    n_frames = codes.shape[0] - 1
-    starts   = frame_latent_starts(n_frames)
-    n_lat    = os.path.getsize(vae_path) // (LATENT_CHANNELS * 4)
-    while n_frames > 0 and starts[n_frames] > n_lat:
-        n_frames -= 1
+    n_frames, starts = track_frames(vae_path)
 
     model = HiddenEncoder().to(DEVICE).eval()
     state = torch.load(args.ckpt, map_location=DEVICE)
@@ -131,10 +150,9 @@ def main():
     lm.requires_grad_(False).eval()
     depth.requires_grad_(False).eval()
 
-    sem, ac = decode_codes(lm, depth, h_hat)
-    decoded = codes.clone()
-    decoded[1 : n + 1, 0]  = sem
-    decoded[1 : n + 1, 1:] = ac
+    sem, ac   = decode_codes(lm, depth, h_hat)
+    predicted = torch.cat([sem.unsqueeze(1), ac], dim=1)
+    decoded   = torch.cat([predicted[:1], predicted], dim=0)
 
     os.makedirs(EVAL_TMP, exist_ok=True)
     request["audio_codes"] = ",".join(str(int(v)) for v in decoded.cpu().numpy().flatten())
@@ -146,8 +164,7 @@ def main():
 
     ref, pred = read_wav_left(os.path.join(corpus, args.base + ".wav")), read_wav_left(pred_wav)
     m = min(len(ref), len(pred))
-    print(f"[Eval] STFT cossim {cossim(stft_mag(ref[:m]), stft_mag(pred[:m])):.4f} "
-          f"(exact codes 0.998, true-hidden decode 0.896)", flush=True)
+    print(f"[Eval] {n} frames, STFT cossim {cossim(stft_mag(ref[:m]), stft_mag(pred[:m])):.4f}", flush=True)
 
 
 if __name__ == "__main__":

@@ -1,21 +1,28 @@
 #!/usr/bin/env python3
 # Training loop for the RVQ encoder, hiddens route: AdamW, bf16
 # autocast, MSE plus cosine loss against the dumped LM hidden states.
-# The validation split holds out whole prompts (index % 10 == 9) so
-# validation sees captions the model never trained on. Checkpoints land
-# in training/checkpoints/<run>/ as last.pt and best.pt (lowest
-# validation loss).
+# Several corpora can be given at once, so a run scales by adding
+# datasets rather than by regenerating one. The validation split holds
+# out whole tracks, one prompt in ten for corpora named p<prompt>-r<...>
+# and the last song of each batch otherwise, so validation always sees
+# material the model never trained on. Checkpoints land in
+# training/checkpoints/<run>/ as last.pt, best.pt (lowest validation
+# loss) and ema.pt, the mean of the weights over the final epochs, which
+# is the one to evaluate: it costs nothing and is steadier than any
+# single epoch.
 #
-# Usage: ./train.py <dataset> [--run NAME] [--epochs N] [--batch N] [--lr X]
+# Usage: ./train.py <dataset> [<dataset> ...] [--run NAME] [--epochs N]
+#                   [--batch N] [--lr X] [--seed N]
 
 import argparse
 import math
 import os
+import re
 import time
 
 import torch
 import torch.nn.functional as F
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 
 from dataset import VAE_EXT, HID_EXT, HiddenDataset
 from model import HiddenEncoder
@@ -25,20 +32,23 @@ CHECKPOINTS_DIR   = os.path.join(os.path.dirname(__file__), "checkpoints")
 VAL_PROMPT_STRIDE = 10
 WARMUP_STEPS      = 500
 LOG_EVERY_STEPS   = 50
-SEED              = 42
+EMA_EPOCHS        = 20
 
 
-def prompt_index(base: str) -> int:
-    # Corpus bases are p<prompt>-r<round><song><variation>
-    return int(base[1:3])
+def is_held_out(base: str) -> bool:
+    # Corpus bases are p<prompt>-r<round><song><variation>; anything else
+    # holds out the last song of each generation batch
+    match = re.match(r"^p(\d\d)-r\d\d", base)
+    if match:
+        return int(match.group(1)) % VAL_PROMPT_STRIDE == VAL_PROMPT_STRIDE - 1
+    return base.endswith("50")
 
 
 def split_bases(corpus_dir: str) -> tuple[list[str], list[str]]:
     bases = sorted(f[: -len(VAE_EXT)] for f in os.listdir(corpus_dir) if f.endswith(VAE_EXT))
     bases = [b for b in bases if os.path.exists(os.path.join(corpus_dir, b + HID_EXT))]
-    train = [b for b in bases if prompt_index(b) % VAL_PROMPT_STRIDE != VAL_PROMPT_STRIDE - 1]
-    val   = [b for b in bases if prompt_index(b) % VAL_PROMPT_STRIDE == VAL_PROMPT_STRIDE - 1]
-    return train, val
+    return ([b for b in bases if not is_held_out(b)],
+            [b for b in bases if is_held_out(b)])
 
 
 def loss_terms(pred, target):
@@ -65,24 +75,30 @@ def evaluate(model, loader, device):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("dataset")
+    ap.add_argument("datasets", nargs="+")
     ap.add_argument("--run", default="v3")
     ap.add_argument("--epochs", type=int, default=100)
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--lr", type=float, default=3e-4)
+    ap.add_argument("--seed", type=int, default=42)
     args = ap.parse_args()
 
-    torch.manual_seed(SEED)
-    device     = "cuda"
-    corpus_dir = os.path.join(DATASETS_DIR, args.dataset)
-    ckpt_dir   = os.path.join(CHECKPOINTS_DIR, args.run)
+    torch.manual_seed(args.seed)
+    device   = "cuda"
+    ckpt_dir = os.path.join(CHECKPOINTS_DIR, args.run)
     os.makedirs(ckpt_dir, exist_ok=True)
 
-    train_bases, val_bases = split_bases(corpus_dir)
-    train_set = HiddenDataset(corpus_dir, train_bases, random_crop=True)
-    val_set   = HiddenDataset(corpus_dir, val_bases)
-    print(f"[Data] {len(train_bases)} train tracks ({len(train_set)} windows), "
-          f"{len(val_bases)} val tracks ({len(val_set)} windows)", flush=True)
+    train_sets, val_sets = [], []
+    for name in args.datasets:
+        corpus_dir = os.path.join(DATASETS_DIR, name)
+        train_bases, val_bases = split_bases(corpus_dir)
+        train_sets.append(HiddenDataset(corpus_dir, train_bases, random_crop=True))
+        val_sets.append(HiddenDataset(corpus_dir, val_bases))
+        print(f"[Data] {name}: {len(train_bases)} train tracks ({len(train_sets[-1])} windows), "
+              f"{len(val_bases)} val tracks ({len(val_sets[-1])} windows)", flush=True)
+
+    train_set, val_set = ConcatDataset(train_sets), ConcatDataset(val_sets)
+    print(f"[Data] total {len(train_set)} train windows, {len(val_set)} val windows", flush=True)
 
     # The pod caps /dev/shm at 63 MB, below one prefetched batch: the
     # loaders run in the main process
@@ -97,6 +113,7 @@ def main():
     sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: min(
         (s + 1) / WARMUP_STEPS, 0.5 * (1.0 + math.cos(math.pi * s / total_steps))))
 
+    ema, ema_epochs = None, 0
     best_val = float("inf")
     step     = 0
     for epoch in range(args.epochs):
@@ -127,6 +144,19 @@ def main():
             best_val = val_loss
             torch.save(state, os.path.join(ckpt_dir, "best.pt"))
             print(f"[Ckpt] best.pt updated (val loss {val_loss:.4f})", flush=True)
+
+        if epoch >= args.epochs - EMA_EPOCHS:
+            weights = {k: v.detach().float().cpu() for k, v in model.state_dict().items()}
+            ema_epochs += 1
+            if ema is None:
+                ema = weights
+            else:
+                for k in ema:
+                    ema[k] += (weights[k] - ema[k]) / ema_epochs
+
+    torch.save({"model": ema, "epoch": args.epochs - 1, "val_loss": best_val,
+                "averaged_epochs": ema_epochs}, os.path.join(ckpt_dir, "ema.pt"))
+    print(f"[Ckpt] ema.pt written, mean of the last {ema_epochs} epochs", flush=True)
 
 
 if __name__ == "__main__":

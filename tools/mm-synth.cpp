@@ -126,10 +126,11 @@ int main(int argc, char ** argv) {
     pipeline.store = store;
     pipeline_configure(&pipeline, paths, params);
 
-    bool      is_mp3  = true;
-    WavFormat wav_fmt = WAV_S16;
-    if (!audio_parse_format(req.output_format.c_str(), is_mp3, wav_fmt)) {
-        fprintf(stderr, "[Out] FATAL: invalid output_format (use: mp3, wav16, wav24, wav32)\n");
+    AudioFormat out_fmt   = FMT_MP3;
+    WavFormat   wav_fmt   = WAV_S16;
+    int         flac_bits = 16;
+    if (!audio_parse_format(req.output_format.c_str(), out_fmt, wav_fmt, flac_bits)) {
+        fprintf(stderr, "[Out] FATAL: invalid output_format (use: mp3, wav16, wav24, wav32, flac16, flac24)\n");
         return 1;
     }
 
@@ -153,7 +154,7 @@ int main(int argc, char ** argv) {
         }
         std::vector<float> & audio   = tracks[i];
         int                  T_audio = (int) (audio.size() / 2);
-        if (!audio_write(path.c_str(), audio.data(), T_audio, 44100, is_mp3, wav_fmt, req.mp3_bitrate, req.peak_clip)) {
+        if (!audio_write(path.c_str(), audio.data(), T_audio, 44100, req.mp3_bitrate, wav_fmt, req.peak_clip, flac_bits)) {
             return 1;
         }
 

@@ -27,8 +27,14 @@ endif()
 # Put executables and backend .so in the same directory (build root).
 # Without this, ggml defaults to bin/ for .so but executables stay in root,
 # and ggml_backend_load_all() can't find the backends at runtime.
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+# Windows: use a Release/ subdir to match the standard multi-config layout.
+if(WIN32)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/Release)
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/Release)
+else()
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+endif()
 
 # DiT tensor names can exceed default GGML_MAX_NAME of 64
 add_compile_definitions(GGML_MAX_NAME=128)
@@ -109,9 +115,42 @@ else()
     target_compile_options(yyjson PRIVATE -w)
 endif()
 
+# libFLAC (BSD, reference FLAC encoder/decoder, vendored from xiph/flac 1.5.0).
+# Intrinsics/assembly (FLAC__NO_ASM) and Ogg support are disabled; the C core
+# is fully portable. win_utf8_io.c is only needed on Windows (compat.h maps
+# flac_fopen & co to UTF-8 aware variants there).
+set(FLAC_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/vendor/flac/src")
+add_library(flac STATIC
+    ${FLAC_SRC_DIR}/bitmath.c
+    ${FLAC_SRC_DIR}/bitreader.c
+    ${FLAC_SRC_DIR}/bitwriter.c
+    ${FLAC_SRC_DIR}/cpu.c
+    ${FLAC_SRC_DIR}/crc.c
+    ${FLAC_SRC_DIR}/fixed.c
+    ${FLAC_SRC_DIR}/float.c
+    ${FLAC_SRC_DIR}/format.c
+    ${FLAC_SRC_DIR}/lpc.c
+    ${FLAC_SRC_DIR}/md5.c
+    ${FLAC_SRC_DIR}/memory.c
+    ${FLAC_SRC_DIR}/metadata_iterators.c
+    ${FLAC_SRC_DIR}/metadata_object.c
+    ${FLAC_SRC_DIR}/stream_decoder.c
+    ${FLAC_SRC_DIR}/stream_encoder.c
+    ${FLAC_SRC_DIR}/stream_encoder_framing.c
+    ${FLAC_SRC_DIR}/window.c
+    $<$<BOOL:${WIN32}>:${FLAC_SRC_DIR}/win_utf8_io.c>
+)
+target_include_directories(flac PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/vendor/flac/include)
+target_compile_definitions(flac PRIVATE FLAC__NO_ASM FLAC__HAS_OGG=0 PACKAGE_VERSION="1.5.0" PUBLIC FLAC__NO_DLL)
+if(MSVC)
+    target_compile_options(flac PRIVATE /W3 /fp:fast)
+else()
+    target_compile_options(flac PRIVATE -w -fPIC)
+endif()
+
 # mm-synth: full pipeline (LM + depth + cond + dit + vae + wav)
 add_executable(mm-synth tools/mm-synth.cpp src/pipeline.cpp src/model-store.cpp src/request.cpp)
-target_link_libraries(mm-synth PRIVATE yyjson)
+target_link_libraries(mm-synth PRIVATE yyjson flac)
 link_ggml_backends(mm-synth)
 
 # mm-lm: hybrid LM inference (global LM + RVQ depth decoder)
@@ -135,12 +174,13 @@ set_source_files_properties(${WEBUI_OUTPUT} PROPERTIES GENERATED TRUE)
 # mm-server: HTTP server (async job queue + embedded webui)
 add_executable(mm-server tools/mm-server.cpp src/pipeline.cpp src/model-store.cpp src/request.cpp ${WEBUI_OUTPUT})
 target_include_directories(mm-server PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(mm-server PRIVATE yyjson httplib)
+target_link_libraries(mm-server PRIVATE yyjson httplib flac)
 link_ggml_backends(mm-server)
 
 # neural-codec: flow VAE neural audio codec (decode latent -> audio)
 add_executable(neural-codec tools/neural-codec.cpp)
 link_ggml_backends(neural-codec)
+target_link_libraries(neural-codec PRIVATE flac)
 
 # mp3-codec: MP3 encoder/decoder (standalone, no ggml needed)
 # The mp3/ headers are header-only and usable by mm-server too via #include "mp3/mp3enc.h"
@@ -158,7 +198,7 @@ else()
                           -Wno-unused-parameter -Wno-unused-function -Wno-sign-conversion)
     target_link_libraries(mp3-codec PRIVATE m)
 endif()
-target_link_libraries(mp3-codec PRIVATE Threads::Threads)
+target_link_libraries(mp3-codec PRIVATE Threads::Threads flac)
 
 # quantize: GGUF requantizer (BF16 -> K-quants)
 add_executable(quantize tools/quantize.cpp)

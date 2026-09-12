@@ -165,10 +165,10 @@ static void print_usage(const char * prog) {
             "  -o <path>               Output file (auto-named if omitted)\n"
             "  --q8                    Quantize latent to int8 (~89.6 kbit/s)\n"
             "  --q4                    Quantize latent to int4 (~45.5 kbit/s)\n"
-            "  --format <fmt>          mp3, wav16, wav24, wav32 (default: wav16)\n"
+            "  --format <fmt>          mp3, wav16, wav24, wav32, flac16, flac24 (default: wav16)\n"
             "\n"
             "Output naming: song.wav -> song.vae (f32) or song.nac8 (Q8) or song.nac4 (Q4)\n"
-            "               song.vae -> song.wav\n"
+            "               song.vae -> song.wav / song.flac\n"
             "\n"
             "Memory control:\n"
             "  --vae-chunk <N>         Latent frames per tile (default: 689)\n"
@@ -377,9 +377,10 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    bool      is_mp3  = false;
-    WavFormat wav_fmt = WAV_S16;
-    if (!audio_parse_format(format, is_mp3, wav_fmt)) {
+    WavFormat   wav_fmt = WAV_S16;
+    AudioFormat dummy_fmt = FMT_MP3;
+    int         dummy_flac_bits = 16;
+    if (!audio_parse_format(format, dummy_fmt, wav_fmt, dummy_flac_bits)) {
         fprintf(stderr, "Unknown format: %s\n", format);
         print_usage(argv[0]);
         return 1;
@@ -399,7 +400,7 @@ int main(int argc, char ** argv) {
             }
             out_str = auto_output(input_path, ext);
         } else {
-            out_str = auto_output(input_path, is_mp3 ? ".mp3" : ".wav");
+            out_str = auto_output(input_path, dummy_fmt == FMT_MP3 ? ".mp3" : (dummy_fmt == FMT_FLAC ? ".flac" : ".wav"));
         }
         output_path = out_str.c_str();
     }
@@ -559,8 +560,10 @@ int main(int argc, char ** argv) {
     }
 
     bool ok;
-    if (is_mp3) {
+    if (dummy_fmt == FMT_MP3) {
         ok = audio_write_mp3(output_path, planar.data(), T_audio, 44100, 128);
+    } else if (dummy_fmt == FMT_FLAC) {
+        ok = audio_write_flac(output_path, planar.data(), T_audio, 44100, dummy_flac_bits);
     } else {
         ok = audio_write_wav(output_path, planar.data(), T_audio, 44100, wav_fmt);
     }

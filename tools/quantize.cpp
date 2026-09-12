@@ -263,14 +263,13 @@ int main(int argc, char ** argv) {
         }
     }
 
-    // Read block count for bump policy
+    // Layer count for the bump policy, read off the tensors themselves: the
+    // file always carries them, whatever metadata its converter wrote
     int n_layers = 0;
-    {
-        char key[128];
-        snprintf(key, sizeof(key), "%s.block_count", arch);
-        int64_t idx = gguf_find_key(inp, key);
-        if (idx >= 0) {
-            n_layers = (int) gguf_get_val_u32(inp, (int) idx);
+    for (int i = 0; i < n_tensors; i++) {
+        int layer = extract_layer(gguf_get_tensor_name(inp, i));
+        if (layer + 1 > n_layers) {
+            n_layers = layer + 1;
         }
     }
 

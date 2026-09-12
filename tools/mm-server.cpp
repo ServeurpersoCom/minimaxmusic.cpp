@@ -560,16 +560,15 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
     }
 
     // Output format from MM3Request.output_format. Converts the string to
-    // (output_wav, wav_fmt) using the same parser the CLI uses.
-    bool      output_wav = false;
-    WavFormat wav_fmt    = WAV_S16;
+    // (out_fmt, wav_fmt, flac_bits) using the same parser the CLI uses.
+    AudioFormat out_fmt   = FMT_MP3;
+    WavFormat   wav_fmt   = WAV_S16;
+    int         flac_bits = 16;
     {
-        bool is_mp3 = true;
-        if (!audio_parse_format(r.output_format.c_str(), is_mp3, wav_fmt)) {
-            json_error(res, 400, "Invalid output_format (use: mp3, wav16, wav24, wav32)");
+        if (!audio_parse_format(r.output_format.c_str(), out_fmt, wav_fmt, flac_bits)) {
+            json_error(res, 400, "Invalid output_format (use: mp3, wav16, wav24, wav32, flac16, flac24)");
             return;
         }
-        output_wav = !is_mp3;
     }
     request_resolve_seed(&r);
     request_resolve_lm_seed(&r);
@@ -580,7 +579,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
     }
 
     auto job = job_create();
-    work_push([job, r, output_wav, wav_fmt]() {
+    work_push([job, r, out_fmt, wav_fmt, flac_bits]() {
         active_job_set(job);
         MM3ModelPaths paths;
         resolve_paths(r, paths);
@@ -600,17 +599,22 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         }
 
         // encode (peak normalize + encode), WAV_F32 preserves full range
-        const char *             mime = output_wav ? "audio/wav" : "audio/mpeg";
+        const char *             mime = out_fmt == FMT_WAV ? "audio/wav" : (out_fmt == FMT_FLAC ? "audio/flac" : "audio/mpeg");
         std::vector<std::string> parts(tracks.size());
         for (size_t i = 0; i < tracks.size(); i++) {
             std::vector<float> & audio   = tracks[i];
             int                  T_audio = (int) (audio.size() / 2);
-            if (!output_wav || wav_fmt != WAV_F32) {
+            if (out_fmt != FMT_WAV || wav_fmt != WAV_F32) {
                 audio_normalize(audio.data(), T_audio * 2, r.peak_clip);
             }
-            parts[i] = output_wav ? audio_encode_wav(audio.data(), T_audio, 44100, wav_fmt) :
-                                    audio_encode_mp3(audio.data(), T_audio, 44100, r.mp3_bitrate, server_cancel_job,
-                                                     (void *) &job->cancel);
+            if (out_fmt == FMT_WAV) {
+                parts[i] = audio_encode_wav(audio.data(), T_audio, 44100, wav_fmt);
+            } else if (out_fmt == FMT_FLAC) {
+                parts[i] = audio_encode_flac(audio.data(), T_audio, 44100, flac_bits);
+            } else {
+                parts[i] = audio_encode_mp3(audio.data(), T_audio, 44100, r.mp3_bitrate, server_cancel_job,
+                                            (void *) &job->cancel);
+            }
             if (job->cancel.load()) {
                 job->status.store(JobStatus::CANCELLED);
                 return;

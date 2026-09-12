@@ -42,9 +42,9 @@ int main(int argc, char ** argv) {
                 "Usage: %s -i <input> -o <output> [options]\n"
                 "\n"
                 "  -i <path>     Input file (WAV or MP3)\n"
-                "  -o <path>     Output file (WAV or MP3)\n"
+                "  -o <path>     Output file (WAV, MP3 or FLAC)\n"
                 "  -b <kbps>     Bitrate for MP3 encoding (default: 128)\n"
-                "  --format <fmt>  WAV format: wav16, wav24, wav32 (default: wav16)\n"
+                "  --format <fmt>  WAV format: wav16, wav24, wav32; FLAC: flac16, flac24 (default: wav16)\n"
                 "\n"
                 "Mode is auto-detected from output extension.\n"
                 "\n"
@@ -52,15 +52,17 @@ int main(int argc, char ** argv) {
                 "  %s -i song.wav -o song.mp3\n"
                 "  %s -i song.wav -o song.mp3 -b 192\n"
                 "  %s -i song.mp3 -o song.wav\n"
+                "  %s -i song.wav -o song.flac --format flac24\n"
                 "  %s -i song.mp3 -o song.wav --format wav32\n",
-                argv[0], argv[0], argv[0], argv[0], argv[0]);
+                argv[0], argv[0], argv[0], argv[0], argv[0], argv[0]);
         return 1;
     }
 
-    const char * input   = NULL;
-    const char * output  = NULL;
-    int          bitrate = 128;
-    WavFormat    wav_fmt = WAV_S16;
+    const char * input    = NULL;
+    const char * output   = NULL;
+    int          bitrate  = 128;
+    WavFormat    wav_fmt  = WAV_S16;
+    int          flac_bits = 16;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
@@ -70,8 +72,8 @@ int main(int argc, char ** argv) {
         } else if (strcmp(argv[i], "-b") == 0 && i + 1 < argc) {
             bitrate = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--format") == 0 && i + 1 < argc) {
-            bool dummy_mp3;
-            if (!audio_parse_format(argv[++i], dummy_mp3, wav_fmt)) {
+            AudioFormat dummy_fmt;
+            if (!audio_parse_format(argv[++i], dummy_fmt, wav_fmt, flac_bits)) {
                 fprintf(stderr, "[MP3-Codec] Unknown format: %s\n", argv[i]);
                 return 1;
             }
@@ -93,15 +95,18 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    // write output (WAV or MP3, auto-detected from extension)
+    // write output (WAV, FLAC or MP3, auto-detected from extension)
     bool ok;
     if (ends_with(output, ".mp3")) {
         ok = audio_write_mp3(output, audio, T, sr, bitrate);
+    } else if (ends_with(output, ".flac")) {
+        ok = audio_write_flac(output, audio, T, sr, flac_bits);
     } else if (ends_with(output, ".wav")) {
         ok = audio_write_wav(output, audio, T, sr, wav_fmt);
     } else {
         fprintf(stderr,
-                "[MP3-Codec] Cannot determine format from output extension (use .mp3 to encode, .wav to decode)\n");
+                "[MP3-Codec] Cannot determine format from output extension (use .mp3 to encode, .wav / .flac to "
+                "decode)\n");
         free(audio);
         return 1;
     }

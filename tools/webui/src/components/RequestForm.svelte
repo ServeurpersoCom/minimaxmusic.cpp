@@ -447,6 +447,8 @@
 						<option value="wav16">WAV16</option>
 						<option value="wav24">WAV24</option>
 						<option value="wav32">WAV32</option>
+						<option value="flac16">FLAC16</option>
+						<option value="flac24">FLAC24</option>
 					</select></label
 				>
 			</div>

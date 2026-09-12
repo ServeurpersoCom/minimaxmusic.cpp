@@ -48,7 +48,7 @@ struct MM3Request {
     // Target percentile is 1.0 - peak_clip/1000000.0. WAV32 skips it.
     int peak_clip;  // 10
 
-    // audio output format: "mp3", "wav16", "wav24", "wav32"
+    // audio output format: "mp3", "wav16", "wav24", "wav32", "flac16", "flac24"
     std::string output_format;
 
     // MP3 encoder bitrate in kbps, used when output_format is "mp3".

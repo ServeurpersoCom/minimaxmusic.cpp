@@ -9,8 +9,10 @@
 #include <random>
 #include <string>
 
+// FP_TO_FLOAT writes the shortest text that reads back to the same float, so
+// a 0.7f comes out as 0.7 instead of 0.699999988079071 and a 1.005f survives
 static const yyjson_write_flag WRITE_FLAGS =
-    YYJSON_WRITE_PRETTY | YYJSON_WRITE_PRETTY_TWO_SPACES | YYJSON_WRITE_FP_TO_FIXED(2);
+    YYJSON_WRITE_PRETTY | YYJSON_WRITE_PRETTY_TWO_SPACES | YYJSON_WRITE_FP_TO_FLOAT;
 
 void request_init(MM3Request * r) {
     r->caption = "";

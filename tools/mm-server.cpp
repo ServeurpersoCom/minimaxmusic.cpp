@@ -386,20 +386,9 @@ static std::condition_variable cv_log;
 static std::string             log_ring[LOG_RING_SIZE];
 static uint64_t                log_seq = 0;
 
-static int g_real_stderr_fd = -1;
-static int g_pipe_read_fd   = -1;
-
-static void setup_log_capture() {
-    g_real_stderr_fd = fd_dup(STDERR_FILENO);
-    int pipefd[2];
-    if (fd_pipe(pipefd) != 0) {
-        g_real_stderr_fd = -1;
-        return;
-    }
-    g_pipe_read_fd = pipefd[0];
-    fd_dup2(pipefd[1], STDERR_FILENO);
-    fd_close(pipefd[1]);
-}
+static int         g_real_stderr_fd = -1;
+static int         g_pipe_read_fd   = -1;
+static std::thread g_log_reader;
 
 // reader thread: drain pipe, forward to real stderr, push lines to ring.
 // exits when the write end of the pipe is closed (fd_dup2 restores real stderr).
@@ -431,38 +420,46 @@ static void log_reader_main() {
     fd_close(g_pipe_read_fd);
 }
 
-static void teardown_log_capture() {
+// Restore stderr and drain the reader before the pipe dies with the process.
+// Idempotent: the destructor and the exit hook both land here, either order.
+static void log_capture_stop() {
     if (g_real_stderr_fd < 0) {
         return;
     }
     fflush(stderr);
+    // the restore drops the last write end, so the reader reads EOF and returns
     fd_dup2(g_real_stderr_fd, STDERR_FILENO);
-    // g_real_stderr_fd stays open: the reader thread writes to it
+    cv_log.notify_all();
+    if (g_log_reader.joinable()) {
+        g_log_reader.join();
+    }
+    fd_close(g_real_stderr_fd);
+    g_real_stderr_fd = -1;
 }
 
-// RAII: captures stderr on construction, restores + joins reader on destruction.
-// safe on any exit path (early arg errors, model load failures, normal shutdown).
+static void setup_log_capture() {
+    g_real_stderr_fd = fd_dup(STDERR_FILENO);
+    int pipefd[2];
+    if (fd_pipe(pipefd) != 0) {
+        fd_close(g_real_stderr_fd);
+        g_real_stderr_fd = -1;
+        return;
+    }
+    g_pipe_read_fd = pipefd[0];
+    fd_dup2(pipefd[1], STDERR_FILENO);
+    fd_close(pipefd[1]);
+    // A loader aborts the process with exit() on a fatal error, which skips
+    // every destructor: the hook still drains the pipe, so the message that
+    // explains the failure reaches the terminal.
+    atexit(log_capture_stop);
+    g_log_reader = std::thread(log_reader_main);
+}
+
+// RAII: captures stderr on construction, restores and drains on destruction.
 struct LogCapture {
-    std::thread reader;
+    LogCapture() { setup_log_capture(); }
 
-    LogCapture() {
-        setup_log_capture();
-        reader = std::thread(log_reader_main);
-    }
-
-    ~LogCapture() {
-        teardown_log_capture();
-        cv_log.notify_all();
-        if (reader.joinable()) {
-            reader.join();
-        }
-
-        // reader is done draining the pipe, safe to close
-        if (g_real_stderr_fd >= 0) {
-            fd_close(g_real_stderr_fd);
-            g_real_stderr_fd = -1;
-        }
-    }
+    ~LogCapture() { log_capture_stop(); }
 };
 
 // GET /logs: SSE stream of stderr lines.

@@ -375,8 +375,10 @@ length (689 for a full window):
   `lat[:172] = (1 - (1 - 1e-6) * t) * noise_prompt + t * prev_latent`,
   restored after the step. The carry for the next window is latent range
   [L - 344, L - 172).
-- Initial noise: `philox_normal4` seeded by `seed`, drawn as one
-  continuous stream across windows.
+- Initial noise: `philox_normal4` seeded by `seed`. The reference draws one
+  `(1, 128, T)` tensor per window, so the subsequence walks channel major
+  inside the window and the window index is the generator offset, the two
+  rules that make a seed reproduce the reference song.
 
 ### Decode and stitch
 
@@ -815,13 +817,22 @@ from `tests/` with the ready build in `../build`.
 
 ### Parity suite
 
-`./parity.sh [component|all]` compares each GGML module against the
-`from_pretrained` reference on fixed seeds: `mm3-{vae,cond,dit,depth,lm}-ref.py`
-dump torch outputs, the `test-*` harnesses dump GGML outputs, and
-`parity-compare.py` checks relative RMS + max abs error (+ argmax token
-match for the samplers), exit 1 on FAIL. Thresholds: vae/cond 1e-2, depth
-2e-2, dit 5e-2, lm 2e-2 + argmax. `GGML_BACKEND` selects the device (empty
-= CUDA0).
+One test per component, `test-{vae,cond,depth,dit,lm}.py`, each comparing
+its GGML module against the `from_pretrained` reference on fixed seeds. A
+test owns both sides: it builds the torch reference, runs its `test-*`
+binary on the same inputs, checks relative RMS + max abs error (+ argmax
+token match where it applies) against its own threshold, and exits non zero
+on failure. Thresholds: vae/cond 1e-2, depth 2e-2, dit 5e-2, lm 2e-2 +
+argmax. `GGML_BACKEND` selects the device (empty = CUDA0), and the
+`test-*.sh` next to each test runs it on CUDA0 then CPU and archives the
+output as `{backend}-{component}.log`.
+
+`test-philox.py` checks the noise the DiT starts from against
+`torch.randn` on CUDA in bfloat16, on one window worth of elements, which is
+the unit the pipeline draws. The mapping holds while a draw fits the CUDA
+grid in one pass: past about 288768 elements on an RTX PRO 6000 the kernel of
+torch stops giving one Philox subsequence per element, so a window sized
+beyond that would no longer match on that device.
 
 Audit method behind the thresholds: with a temporary F32 GGUF, GGML
 matches torch F32 at 2.3e-6 relative RMS (exact semantics). The residual

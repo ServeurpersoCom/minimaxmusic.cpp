@@ -705,7 +705,6 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         std::vector<std::vector<std::vector<float>>> latent_chunks(M);  // [variation][window][T_lat, 128]
         std::vector<int>                             chunk_lat(chunk_starts.size());
         std::vector<std::vector<float>>              prev_latent(M), noise_prompt(M), xt(M);
-        std::vector<int64_t>                         noise_index(M, 0);
         std::vector<float>                           prev_condition, cond_track, zeros_track;
         std::vector<float>                           v_cond, v_uncond;
 
@@ -726,14 +725,17 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                 std::copy(prev_condition.begin(), prev_condition.begin() + (size_t) overlap * 2048, cond_track.begin());
             }
 
-            // Initial noise per variation, Philox stream continued across
-            // windows, one seed per variation
+            // Initial noise per variation. The reference draws one (128, T)
+            // tensor per window, so the subsequence walks channel major and
+            // the window index is the generator offset.
             for (int j = 0; j < M; j++) {
                 xt[j].resize((size_t) T_lat * 128);
-                for (float & x : xt[j]) {
-                    float vals[4];
-                    philox_normal4((uint64_t) (req.seed + j), noise_index[j]++, 0, vals);
-                    x = vals[0];
+                for (int c = 0; c < 128; c++) {
+                    for (int t = 0; t < T_lat; t++) {
+                        float vals[4];
+                        philox_normal4((uint64_t) (req.seed + j), (int64_t) c * T_lat + t, (int64_t) k, vals);
+                        xt[j][(size_t) t * 128 + c] = vals[0];
+                    }
                 }
                 noise_prompt[j].assign(xt[j].begin(), xt[j].begin() + (size_t) overlap * 128);
             }

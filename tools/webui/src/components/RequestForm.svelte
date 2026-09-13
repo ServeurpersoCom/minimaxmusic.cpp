@@ -291,7 +291,7 @@
 	<div class="section-title">Lyrics</div>
 	<textarea
 		rows="8"
-		placeholder="[verse]&#10;Write your lyrics here..."
+		placeholder={'[verse]\nWrite your lyrics here...'}
 		bind:value={app.request.lyrics}
 	></textarea>
 

@@ -58,7 +58,7 @@ export default defineConfig({
 	plugins: [svelte(), viteSingleFile(), mm3GzipPlugin()],
 
 	define: {
-		__ACE_VERSION__: JSON.stringify(gitVersion())
+		__MM3_VERSION__: JSON.stringify(gitVersion())
 	},
 
 	// dev server: proxy mm-server endpoints

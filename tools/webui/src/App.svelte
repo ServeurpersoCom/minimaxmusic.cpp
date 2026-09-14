@@ -42,7 +42,7 @@
 <div class="mm3-app">
 	<header>
 		<span class="header-label">minimaxmusic.cpp</span>
-		<span class="header-version">{__ACE_VERSION__}</span>
+		<span class="header-version">{__MM3_VERSION__}</span>
 		<div class="spacer"></div>
 		<label class="dark-toggle">
 			<input type="checkbox" bind:checked={app.dark} /> Dark

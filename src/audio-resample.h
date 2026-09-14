@@ -4,6 +4,7 @@
 // Part of acestep.cpp. MIT license.
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 

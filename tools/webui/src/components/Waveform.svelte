@@ -77,6 +77,7 @@
 				dur = buf.duration;
 				if (!song.peaks) {
 					song.peaks = computePeaks(buf, WAVEFORM_BINS);
+					song.duration = buf.duration;
 					if (song.id != null) putSong($state.snapshot(song));
 					peaks = song.peaks;
 					draw();

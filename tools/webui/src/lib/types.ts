@@ -44,6 +44,7 @@ export interface Song {
 	created: number;
 	caption: string;
 	seed: number;
+	// length of the audio in seconds, decoded once and cached with the peaks
 	duration: number;
 	request: MM3Request;
 	audio: Blob;

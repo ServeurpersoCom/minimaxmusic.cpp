@@ -23,8 +23,8 @@ struct MM3Request {
                        // 32 bits. Same int64_t storage trick as seed.
 
     // batching: number of songs generated from this prompt. Each song
-    // samples with its own stream (lm_seed + index), acestep convention
-    // of consecutive internal seeds.
+    // samples with its own stream (lm_seed + index), consecutive internal
+    // seeds.
     int lm_batch_size;  // 1
 
     // number of flow matching variations per song, consecutive noise

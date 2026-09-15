@@ -84,6 +84,7 @@
 		box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 		padding: 0.75rem;
 		min-width: 16rem;
+		max-width: min(90vw, 28rem);
 		display: flex;
 		flex-direction: column;
 		gap: 0.5rem;

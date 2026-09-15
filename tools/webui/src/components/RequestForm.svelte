@@ -15,6 +15,7 @@
 	let busy = $state(false);
 	let fileInput: HTMLInputElement;
 	let saveFormatOpen = $state(false);
+	let takeOpen = $state(false);
 
 	let d = $derived(app.props?.defaults);
 
@@ -160,6 +161,26 @@
 		} finally {
 			busy = false;
 		}
+	}
+
+	// A request carrying audio codes renders the take they hold, so the run
+	// asks which take is wanted before it starts. An empty box goes straight
+	// to the pipeline.
+	function askTake() {
+		if (app.request.audio_codes?.trim()) {
+			takeOpen = true;
+			return;
+		}
+		generate();
+	}
+
+	// The codes leave the request and both seeds go back to a free draw, so
+	// the AR half performs the prompt again instead of retracing the take
+	function newTake() {
+		app.request.audio_codes = '';
+		app.request.lm_seed = -1;
+		app.request.seed = -1;
+		generate();
 	}
 
 	// cancel the active pipeline job
@@ -463,7 +484,7 @@
 		<button
 			type="button"
 			disabled={busy}
-			onclick={generate}
+			onclick={askTake}
 			title="Run the full pipeline: LM, depth decoder, flow matching DiT, VAE">Generate</button
 		>
 		<button type="button" disabled={!busy} onclick={cancelPipeline} title="Cancel the active job"
@@ -471,6 +492,27 @@
 		>
 	</div>
 </form>
+
+<Dialog bind:open={takeOpen} title="Reuse this take?">
+	{#snippet body()}
+		The audio codes hold a performance already sung. Keeping them renders it again, dropping them
+		performs the prompt anew.
+	{/snippet}
+	{#snippet actions(close)}
+		<DialogButton
+			onclick={() => {
+				close();
+				generate();
+			}}>Same take</DialogButton
+		>
+		<DialogButton
+			onclick={() => {
+				close();
+				newTake();
+			}}>New take</DialogButton
+		>
+	{/snippet}
+</Dialog>
 
 <Dialog bind:open={saveFormatOpen} title="Save format">
 	{#snippet actions(close)}

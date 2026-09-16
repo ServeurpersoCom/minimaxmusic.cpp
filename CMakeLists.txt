@@ -165,3 +165,5 @@ add_executable(quantize tools/quantize.cpp)
 link_ggml_backends(quantize)
 
 add_subdirectory(tests)
+
+install(TARGETS mm-server mm-synth mm-lm neural-codec mp3-codec quantize RUNTIME)

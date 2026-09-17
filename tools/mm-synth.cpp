@@ -86,6 +86,9 @@ int main(int argc, char ** argv) {
             params.clamp_fp16 = true;
         } else if (a == "--dump" && i + 1 < argc) {
             params.dump_dir = argv[++i];
+        } else if (a == "--help" || a == "-h") {
+            print_usage(argv[0]);
+            return 0;
         } else {
             print_usage(argv[0]);
             return 1;

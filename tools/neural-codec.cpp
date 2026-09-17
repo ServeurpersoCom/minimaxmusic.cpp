@@ -358,11 +358,7 @@ int main(int argc, char ** argv) {
             quant = 8;
         } else if (strcmp(argv[i], "--q4") == 0) {
             quant = 4;
-        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
-            print_usage(argv[0]);
-            return 0;
         } else {
-            fprintf(stderr, "Unknown arg: %s\n", argv[i]);
             print_usage(argv[0]);
             return 1;
         }

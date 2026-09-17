@@ -35,25 +35,29 @@ static bool ends_with(const char * str, const char * suffix) {
     return true;
 }
 
+static void print_usage(const char * prog) {
+    fprintf(stderr, "minimaxmusic.cpp %s\n\n", MM3_VERSION);
+    fprintf(stderr,
+            "Usage: %s -i <input> -o <output> [options]\n"
+            "\n"
+            "  -i <path>     Input file (WAV or MP3)\n"
+            "  -o <path>     Output file (WAV or MP3)\n"
+            "  -b <kbps>     Bitrate for MP3 encoding (default: 128)\n"
+            "  --format <fmt>  WAV format: wav16, wav24, wav32 (default: wav16)\n"
+            "\n"
+            "Mode is auto-detected from output extension.\n"
+            "\n"
+            "Examples:\n"
+            "  %s -i song.wav -o song.mp3\n"
+            "  %s -i song.wav -o song.mp3 -b 192\n"
+            "  %s -i song.mp3 -o song.wav\n"
+            "  %s -i song.mp3 -o song.wav --format wav32\n",
+            prog, prog, prog, prog, prog);
+}
+
 int main(int argc, char ** argv) {
     if (argc < 5) {
-        fprintf(stderr, "minimaxmusic.cpp %s\n\n", MM3_VERSION);
-        fprintf(stderr,
-                "Usage: %s -i <input> -o <output> [options]\n"
-                "\n"
-                "  -i <path>     Input file (WAV or MP3)\n"
-                "  -o <path>     Output file (WAV or MP3)\n"
-                "  -b <kbps>     Bitrate for MP3 encoding (default: 128)\n"
-                "  --format <fmt>  WAV format: wav16, wav24, wav32 (default: wav16)\n"
-                "\n"
-                "Mode is auto-detected from output extension.\n"
-                "\n"
-                "Examples:\n"
-                "  %s -i song.wav -o song.mp3\n"
-                "  %s -i song.wav -o song.mp3 -b 192\n"
-                "  %s -i song.mp3 -o song.wav\n"
-                "  %s -i song.mp3 -o song.wav --format wav32\n",
-                argv[0], argv[0], argv[0], argv[0], argv[0]);
+        print_usage(argv[0]);
         return 1;
     }
 
@@ -76,13 +80,13 @@ int main(int argc, char ** argv) {
                 return 1;
             }
         } else {
-            fprintf(stderr, "[MP3-Codec] Unknown option: %s\n", argv[i]);
+            print_usage(argv[0]);
             return 1;
         }
     }
 
     if (!input || !output) {
-        fprintf(stderr, "[MP3-Codec] Both -i and -o are required\n");
+        print_usage(argv[0]);
         return 1;
     }
 

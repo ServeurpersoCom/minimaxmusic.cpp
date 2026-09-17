@@ -731,9 +731,6 @@ int main(int argc, char ** argv) {
             g_params.clamp_fp16 = true;
         } else if (strcmp(argv[i], "--dump") == 0 && i + 1 < argc) {
             g_params.dump_dir = argv[++i];
-        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
-            print_usage(argv[0]);
-            return 0;
         } else {
             print_usage(argv[0]);
             return 1;
@@ -741,7 +738,6 @@ int main(int argc, char ** argv) {
     }
 
     if (g_models_dir.empty()) {
-        fprintf(stderr, "[Server] ERROR: --models is required\n");
         print_usage(argv[0]);
         return 1;
     }

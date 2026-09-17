@@ -95,18 +95,13 @@ int main(int argc, char ** argv) {
             params.clamp_fp16 = true;
         } else if (a == "--dump-tokens" && i + 1 < argc) {
             dump_tokens_path = argv[++i];
-        } else if (a == "-h" || a == "--help") {
-            print_usage(argv[0]);
-            return 0;
         } else {
-            fprintf(stderr, "Unknown arg: %s\n", a.c_str());
             print_usage(argv[0]);
             return 1;
         }
     }
 
     if (models.empty()) {
-        fprintf(stderr, "[CLI] ERROR: --models required\n");
         print_usage(argv[0]);
         return 1;
     }

@@ -855,8 +855,12 @@ int main(int argc, char ** argv) {
     fprintf(stderr, "[Server] Listening on %s:%d\n", host.c_str(), port);
     fprintf(stderr, "[Server] Models: %zu LM, %zu Depth, %zu Cond, %zu DiT, %zu VAE\n", g_registry.lm.size(),
             g_registry.depth.size(), g_registry.cond.size(), g_registry.dit.size(), g_registry.vae.size());
+    // A failed bind must reach the caller: a supervisor that reads only the
+    // exit code would otherwise believe the daemon is up.
+    int exit_code = 0;
     if (!svr.listen(host, port)) {
         fprintf(stderr, "[Server] FATAL: cannot bind %s:%d\n", host.c_str(), port);
+        exit_code = 1;
     }
 
     // stop worker thread: cancel the active job (the pipeline polls the
@@ -871,5 +875,5 @@ int main(int argc, char ** argv) {
 
     store_free(g_pipeline.store);
     fprintf(stderr, "[Server] Done\n");
-    return 0;
+    return exit_code;
 }

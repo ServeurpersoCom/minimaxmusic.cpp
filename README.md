@@ -56,6 +56,8 @@ buildall.cmd      # all backends (CUDA + Vulkan + CPU, runtime loading)
 ./buildall.sh     # all backends (CUDA + Vulkan + CPU, runtime loading)
 ```
 
+`-DGGML_SOURCE_DIR=<path>` swaps the ggml submodule for another tree (upstream ggml, llama.cpp/ggml).
+
 macOS auto-enables Metal and Accelerate BLAS with any of the above.
 
 ## Convert

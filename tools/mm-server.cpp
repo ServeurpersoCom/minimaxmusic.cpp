@@ -578,6 +578,15 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         json_error(res, 400, "Unknown model name or empty model bucket");
         return;
     }
+    {
+        // adapters_dir is fixed at startup, so this is safe off the worker
+        std::vector<AdapterSpec> lm, dit;
+        std::string              adapter_error;
+        if (!pipeline_resolve_adapters(&g_pipeline, r, &lm, &dit, &adapter_error)) {
+            json_error(res, 400, adapter_error.c_str());
+            return;
+        }
+    }
 
     auto job = job_create();
     work_push([job, r, output_wav, wav_fmt]() {
@@ -657,6 +666,24 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
     add_names(models, "dit", g_registry.dit);
     add_names(models, "vae", g_registry.vae);
 
+    // adapters: what the adapter directory holds, rescanned per call so a
+    // file dropped in is usable without a restart
+    yyjson_mut_val * adapters = yyjson_mut_arr(doc);
+    for (const auto & e : adapter_scan(g_pipeline.adapters_dir)) {
+        yyjson_mut_val * item = yyjson_mut_arr_add_obj(doc, adapters);
+        yyjson_mut_obj_add_strncpy(doc, item, "name", e.name.c_str(), e.name.size());
+        yyjson_mut_obj_add_bool(doc, item, "ok", e.info.ok);
+        yyjson_mut_obj_add_bool(doc, item, "lm", e.info.lm_keys > 0);
+        yyjson_mut_obj_add_bool(doc, item, "dit", e.info.dit_keys > 0);
+        if (!e.info.trigger.empty()) {
+            yyjson_mut_obj_add_strncpy(doc, item, "trigger", e.info.trigger.c_str(), e.info.trigger.size());
+        }
+        if (!e.info.error.empty()) {
+            yyjson_mut_obj_add_strncpy(doc, item, "error", e.info.error.c_str(), e.info.error.size());
+        }
+    }
+    yyjson_mut_obj_add_val(doc, root, "adapters", adapters);
+
     // defaults: the full request schema with default values
     MM3Request def;
     request_init(&def);
@@ -689,6 +716,7 @@ static void print_usage(const char * argv0) {
             "  --max-batch <N>        LM batch limit (default: 1)\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
             "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)\n"
+            "  --adapters <dir>       Directory of LoRA / LoKr adapters requests may name\n"
             "\n"
             "Debug:\n"
             "  --no-fa                Disable flash attention\n"
@@ -723,6 +751,8 @@ int main(int argc, char ** argv) {
             g_params.max_seq = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--keep-loaded") == 0) {
             g_keep_loaded = true;
+        } else if (strcmp(argv[i], "--adapters") == 0 && i + 1 < argc) {
+            g_pipeline.adapters_dir = argv[++i];
         } else if (strcmp(argv[i], "--no-fa") == 0) {
             g_params.use_fa = false;
         } else if (strcmp(argv[i], "--no-batch-cfg") == 0) {

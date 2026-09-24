@@ -415,6 +415,7 @@ required: the server rejects requests missing either.
     "lm_batch_size": 1,
     "synth_batch_size": 1,
     "dit_cfg":       1.7,
+    "flow_shift":    0.0,
     "peak_clip":     10,
     "output_format": "mp3",
     "mp3_bitrate":   128,
@@ -422,7 +423,8 @@ required: the server rejects requests missing either.
     "depth_model":   "",
     "cond_model":    "",
     "dit_model":     "",
-    "vae_model":     ""
+    "vae_model":     "",
+    "adapters":      []
 }
 ```
 
@@ -489,6 +491,11 @@ returned by the server as the JSON part paired with each audio track;
 **`dit_cfg`** (float, default `1.7`)
 CFG scale on the DiT velocity field.
 
+**`flow_shift`** (float, default `0`)
+Shift of the DiT noise levels, `t' = shift t / (1 + (shift - 1) t)`, at
+most 20. `0` is automatic: `(30 - 1) / (steps - 1)` below 30 steps, `1`
+(the native schedule) from 30 steps up.
+
 **`peak_clip`** (int, default `10`)
 Output normalization percentile control: the normalization peak is the
 `1 - peak_clip / 1e6` percentile of the absolute signal. `0` normalizes to
@@ -507,6 +514,15 @@ GGUF filename per component, resolved against the `--models` registry.
 Empty keeps the previously requested model, or falls to the first
 registry entry. Unknown names get a 400 from the server, a FATAL from the CLI. See
 [VRAM and model routing](#vram-and-model-routing).
+
+**`adapters`** (array, default `[]`)
+Adapters merged into the LM and the DiT while they load, each
+`{ "name": <entry of --adapters>, "scale": 1.0, "lm_scale": ..., "dit_scale": ... }`.
+`lm_scale` and `dit_scale` override `scale` for one model; a zero leaves
+that model untouched and unreloaded. `"adapter"` with `"adapter_scale"`
+is read as a one entry list. An unknown name or a file that cannot merge
+gets a 400 from the server. The replay request carries the list, so a
+replayed song re-derives its hiddens through the same adapted LM.
 
 ## mm-lm reference
 

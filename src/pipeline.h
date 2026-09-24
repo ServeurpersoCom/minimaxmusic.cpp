@@ -51,6 +51,11 @@ struct MM3Pipeline {
     MM3ModelPaths     wanted;           // empty strings until the first configure
     MM3PipelineParams params;
     DebugDumper       dumper = {};
+    std::string       adapters_dir;     // where request adapter names resolve, empty without one
+
+    // The adapters of the running request, as the store keys the LM and the DiT
+    std::vector<AdapterSpec> lm_adapters;
+    std::vector<AdapterSpec> dit_adapters;
 };
 
 enum PipelineStatus {
@@ -63,6 +68,16 @@ enum PipelineStatus {
 // module is loaded here; a load failure surfaces as PIPELINE_FAILED
 // from the generate that first requires the failing component.
 void pipeline_configure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3PipelineParams & params);
+
+// Splits the adapters of a request between the LM and the DiT. An adapter
+// that holds nothing for one of them, or has a zero scale there, stays out of
+// its list, so changing it never reloads the other. False with a reason for a
+// name the adapter directory does not hold or a file that cannot merge.
+bool pipeline_resolve_adapters(const MM3Pipeline *        p,
+                               const MM3Request &         r,
+                               std::vector<AdapterSpec> * lm,
+                               std::vector<AdapterSpec> * dit,
+                               std::string *              error);
 
 // Full text to audio generation. Seeds must be resolved by the caller
 // (request_resolve_seed / request_resolve_lm_seed).

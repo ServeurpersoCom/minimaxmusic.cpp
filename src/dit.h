@@ -21,6 +21,7 @@
 // postprocess_conv.weight.
 #pragma once
 
+#include "adapter.h"
 #include "backend.h"
 #include "debug.h"
 #include "ggml-backend.h"
@@ -87,7 +88,7 @@ struct DiT {
     int                   graph_T      = 0;
     int                   graph_B      = 0;
 
-    bool load(const char * gguf_path);
+    bool load(const char * gguf_path, const std::vector<AdapterSpec> & adapters = {});
 
     // One denoising evaluation for a batch of B sequences sharing the
     // schedule step. xt: B contiguous [T, 128] time-major blocks, cond:
@@ -102,7 +103,7 @@ struct DiT {
     void free();
 };
 
-inline bool DiT::load(const char * gguf_path) {
+inline bool DiT::load(const char * gguf_path, const std::vector<AdapterSpec> & adapters) {
     GGUFModel gf = {};
     if (!gf_load(&gf, gguf_path)) {
         fprintf(stderr, "[DiT] FATAL: cannot load %s\n", gguf_path);
@@ -142,6 +143,10 @@ inline bool DiT::load(const char * gguf_path) {
         b.ff_out_b      = gf_load_tensor_f32(&wctx, gf, pfx + "ff_out.bias");
     }
 
+    if (!adapter_apply(&wctx, gf, ADAPTER_DIT, adapters, backend)) {
+        gf_close(&gf);
+        return false;
+    }
     if (!wctx_alloc(&wctx, backend)) {
         return false;
     }

@@ -144,8 +144,59 @@ void pipeline_configure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3P
 // Require helpers: one place builds the store key of each component from
 // the wanted paths and the process-lifetime params, and applies the
 // runtime knobs after every require (idempotent on cache hits).
+bool pipeline_resolve_adapters(const MM3Pipeline *        p,
+                               const MM3Request &         r,
+                               std::vector<AdapterSpec> * lm,
+                               std::vector<AdapterSpec> * dit,
+                               std::string *              error) {
+    lm->clear();
+    dit->clear();
+    for (const auto & a : r.adapters) {
+        std::string path;
+        if (!adapter_resolve(p->adapters_dir, a.name, &path)) {
+            *error = p->adapters_dir.empty() ? "adapters need --adapters <dir>" : "unknown adapter " + a.name;
+            return false;
+        }
+        AdapterInfo info = adapter_inspect(path);
+        if (!info.ok) {
+            *error = info.error;
+            return false;
+        }
+        float lm_scale  = std::isnan(a.lm_scale) ? a.scale : a.lm_scale;
+        float dit_scale = std::isnan(a.dit_scale) ? a.scale : a.dit_scale;
+        if (!std::isfinite(lm_scale) || !std::isfinite(dit_scale)) {
+            *error = "adapter scales must be finite";
+            return false;
+        }
+        if (info.lm_keys > 0 && lm_scale != 0.0f) {
+            lm->push_back({ path, lm_scale });
+        }
+        if (info.dit_keys > 0 && dit_scale != 0.0f) {
+            dit->push_back({ path, dit_scale });
+        }
+    }
+    return true;
+}
+
+// The flow shift a request renders with. Automatic below the 30 steps the
+// schedule was made for: (30 - 1) / (steps - 1) keeps the first steps at the
+// noise levels 30 would have reached, which a short uniform schedule rushes
+// past (a thin, phasey render at 10 steps). HOT-Step validated it by ear at
+// 10 steps, shift 3.2.
+static float pipeline_flow_shift(float requested, int steps) {
+    if (requested > 0.0f) {
+        return requested > 20.0f ? 20.0f : requested;
+    }
+    if (steps >= 30 || steps <= 1) {
+        return 1.0f;
+    }
+    float raw = std::round(29.0f / (float) (steps - 1) * 100.0f) / 100.0f;
+    return raw < 1.0f ? 1.0f : raw > 20.0f ? 20.0f : raw;
+}
+
 static Qwen3LM * require_lm(MM3Pipeline * p) {
-    ModelKey k = { MODEL_LM, p->wanted.lm, p->params.max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch) };
+    ModelKey k = { MODEL_LM, p->wanted.lm, p->params.max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch),
+                   p->lm_adapters };
     Qwen3LM * m = store_require_lm(p->store, k);
     if (m) {
         if (!p->params.use_fa) {
@@ -171,7 +222,7 @@ static CondEnc * require_cond(MM3Pipeline * p) {
 }
 
 static DiT * require_dit(MM3Pipeline * p) {
-    ModelKey k = { MODEL_DIT, p->wanted.dit, 0, 0 };
+    ModelKey k = { MODEL_DIT, p->wanted.dit, 0, 0, p->dit_adapters };
     DiT *    m = store_require_dit(p->store, k);
     if (m) {
         if (!p->params.use_fa) {
@@ -588,6 +639,12 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  std::vector<std::string> *        codes_out) {
     Timer total_timer;
 
+    std::string adapter_error;
+    if (!pipeline_resolve_adapters(p, req, &p->lm_adapters, &p->dit_adapters, &adapter_error)) {
+        fprintf(stderr, "[Pipeline] FATAL: %s\n", adapter_error.c_str());
+        return PIPELINE_FAILED;
+    }
+
     int N = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
     if (N > p->params.max_batch) {
         fprintf(stderr, "[Pipeline] FATAL: lm_batch_size %d exceeds the batch limit %d\n", N, p->params.max_batch);
@@ -692,14 +749,22 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
             }
         }
 
-        // Ascending sigma schedule: linspace(1, 1/steps) inverted, final 1.0
+        // Ascending sigma schedule: linspace(1, 1/steps) inverted, final 1.0,
+        // the noise level warped by the flow shift
         int                steps = req.steps;
+        float              shift = pipeline_flow_shift(req.flow_shift, steps);
         std::vector<float> sig(steps + 1);
         for (int i = 0; i < steps; i++) {
             float lin = 1.0f + (1.0f / (float) steps - 1.0f) * (float) i / (float) (steps - 1);
-            sig[i]    = 1.0f - lin;
+            if (shift != 1.0f) {
+                lin = shift * lin / (1.0f + (shift - 1.0f) * lin);
+            }
+            sig[i] = 1.0f - lin;
         }
         sig[steps] = 1.0f;
+        if (song == 0 && shift != 1.0f) {
+            fprintf(stderr, "[DiT] Flow shift %.2f over %d steps\n", (double) shift, steps);
+        }
 
         // Per-variation window state; the condition track is shared
         std::vector<std::vector<std::vector<float>>> latent_chunks(M);  // [variation][window][T_lat, 128]
@@ -913,6 +978,12 @@ PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
                                     std::atomic<bool> *        cancel,
                                     std::vector<std::string> & codes_out) {
     Timer total_timer;
+
+    std::string adapter_error;
+    if (!pipeline_resolve_adapters(p, req, &p->lm_adapters, &p->dit_adapters, &adapter_error)) {
+        fprintf(stderr, "[Pipeline] FATAL: %s\n", adapter_error.c_str());
+        return PIPELINE_FAILED;
+    }
 
     int N = req.lm_batch_size < 1 ? 1 : req.lm_batch_size;
     if (N > p->params.max_batch) {

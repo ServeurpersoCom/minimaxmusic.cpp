@@ -60,6 +60,7 @@
 #include "ggml-backend.h"
 #include "ggml.h"
 
+#include <filesystem>
 #include <sys/stat.h>
 
 #include <algorithm>
@@ -95,13 +96,25 @@ struct AdapterSpec {
     float       scale;  // user strength for this half
 };
 
-// Stable text of a spec list, the model store key of an adapted half
+static std::vector<std::string> adapter_files(const std::string & path);
+
+// Stable text of a spec list, the model store key of an adapted half; the
+// size and time of each file are in it, so a file replaced in place is merged
+// again rather than served from the store
 static std::string adapter_signature(const std::vector<AdapterSpec> & specs) {
     std::string sig;
     for (const auto & s : specs) {
         char scale[32];
         snprintf(scale, sizeof(scale), "%.6g", (double) s.scale);
-        sig += s.path + "@" + scale + ";";
+        sig += s.path + "@" + scale;
+        for (const auto & file : adapter_files(s.path)) {
+            std::error_code ec;
+            auto            fp   = std::filesystem::u8path(file);
+            auto            size = std::filesystem::file_size(fp, ec);
+            auto            time = std::filesystem::last_write_time(fp, ec).time_since_epoch().count();
+            sig += "|" + std::to_string((unsigned long long) size) + ":" + std::to_string((long long) time);
+        }
+        sig += ";";
     }
     return sig;
 }
@@ -122,6 +135,8 @@ enum AdapterRole {
     ROLE_LORA_B,
     ROLE_ALPHA,
     ROLE_LOKR_W1,
+    ROLE_LOKR_W1A,
+    ROLE_LOKR_W1B,
     ROLE_LOKR_W2,
     ROLE_LOKR_W2A,
     ROLE_LOKR_W2B,
@@ -237,6 +252,7 @@ static bool adapter_parse_key(const std::string & raw, AdapterKey * out) {
         { ".lora_A", ROLE_LORA_A },                { ".lora_B", ROLE_LORA_B },
         { ".lora_alpha", ROLE_ALPHA },             { ".alpha", ROLE_ALPHA },
         { ".lokr_w2_a", ROLE_LOKR_W2A },           { ".lokr_w2_b", ROLE_LOKR_W2B },
+        { ".lokr_w1_a", ROLE_LOKR_W1A },           { ".lokr_w1_b", ROLE_LOKR_W1B },
         { ".lokr_w1", ROLE_LOKR_W1 },              { ".lokr_w2", ROLE_LOKR_W2 },
         { ".diff", ROLE_DIFF },
     };
@@ -418,8 +434,9 @@ static std::map<std::string, std::string> adapter_read_metadata(const STFile & s
 // lora_alpha (or alpha), 0 when absent, and whether it trained rank-stabilised
 // (use_rslora), whose scale is alpha / sqrt(rank) instead of alpha / rank
 struct AdapterConfig {
-    float alpha  = 0.0f;
-    bool  rslora = false;
+    float       alpha  = 0.0f;
+    bool        rslora = false;
+    std::string refused;  // a setting the merge cannot honour exactly
 };
 
 static AdapterConfig adapter_read_config(const std::string & dir) {
@@ -439,6 +456,13 @@ static AdapterConfig adapter_read_config(const std::string & dir) {
     }
     yyjson_val * rs = yyjson_obj_get(root, "use_rslora");
     config.rslora   = rs && yyjson_is_bool(rs) && yyjson_get_bool(rs);
+    // per module ranks and alphas would each need their own scale
+    for (const char * key : { "rank_pattern", "alpha_pattern" }) {
+        yyjson_val * v = yyjson_obj_get(root, key);
+        if (v && yyjson_is_obj(v) && yyjson_obj_size(v) > 0) {
+            config.refused = std::string(key) + " in adapter_config.json is not supported";
+        }
+    }
     yyjson_doc_free(doc);
     return config;
 }
@@ -584,6 +608,10 @@ static AdapterInfo adapter_inspect(const std::string & path) {
         }
         for (const auto & e : st.entries) {
             AdapterKey k;
+            // HOT-Step's trainer marks its files with hot_step.* tensors of its own
+            if (e.name.rfind("hot_step.", 0) == 0) {
+                continue;
+            }
             if (!adapter_parse_key(e.name, &k)) {
                 if (info.ignored++ == 0) {
                     info.first_ignored = e.name;
@@ -608,6 +636,8 @@ struct AdapterModule {
     const STEntry * b     = nullptr;
     const STEntry * alpha = nullptr;
     const STEntry * w1    = nullptr;
+    const STEntry * w1a   = nullptr;
+    const STEntry * w1b   = nullptr;
     const STEntry * w2    = nullptr;
     const STEntry * w2a   = nullptr;
     const STEntry * w2b   = nullptr;
@@ -642,7 +672,7 @@ static bool adapter_fused_parts(const GGUFModel &                              g
         return false;
     }
     for (const auto & n : names) {
-        struct ggml_tensor * t = ggml_get_tensor(gf.meta, (n + ".weight").c_str());
+        struct ggml_tensor * t = gf_meta(gf, (n + ".weight").c_str());
         if (!t) {
             return false;
         }
@@ -696,6 +726,8 @@ static bool adapter_collect(const std::string &                                 
             case ROLE_LORA_B:   m.b = &e; break;
             case ROLE_ALPHA:    m.alpha = &e; break;
             case ROLE_LOKR_W1:  m.w1 = &e; break;
+            case ROLE_LOKR_W1A: m.w1a = &e; break;
+            case ROLE_LOKR_W1B: m.w1b = &e; break;
             case ROLE_LOKR_W2:  m.w2 = &e; break;
             case ROLE_LOKR_W2A: m.w2a = &e; break;
             case ROLE_LOKR_W2B: m.w2b = &e; break;
@@ -730,7 +762,7 @@ static bool adapter_collect(const std::string &                                 
                 return fail("no projections behind " + module);
             }
         } else {
-            struct ggml_tensor * t = ggml_get_tensor(gf.meta, id.c_str());
+            struct ggml_tensor * t = gf_meta(gf, id.c_str());
             if (!t) {
                 return fail("the model has no tensor " + id);
             }
@@ -777,17 +809,17 @@ static bool adapter_collect(const std::string &                                 
                 if (total_rows % 2 != 0) {
                     return fail("odd ff_in height on " + module);
                 }
-                int64_t half = total_rows / 2;
+                int64_t mid = total_rows / 2;
                 std::vector<float> swapped(b.size());
-                std::copy(b.begin() + half * rank, b.end(), swapped.begin());
-                std::copy(b.begin(), b.begin() + half * rank, swapped.begin() + half * rank);
+                std::copy(b.begin() + mid * rank, b.end(), swapped.begin());
+                std::copy(b.begin(), b.begin() + mid * rank, swapped.begin() + mid * rank);
                 b.swap(swapped);
             }
             float   divisor = config.rslora ? std::sqrt((float) rank) : (float) rank;
             float   scaling = user_scale * (alpha > 0.0f ? alpha / divisor : 1.0f);
             int64_t row0    = 0;
             for (const auto & p : parts) {
-                struct ggml_tensor * t = ggml_get_tensor(gf.meta, (p.first + ".weight").c_str());
+                struct ggml_tensor * t = gf_meta(gf, (p.first + ".weight").c_str());
                 if (t->ne[0] != in) {
                     return fail("LoRA input width " + std::to_string(in) + " != " + std::to_string(t->ne[0]) +
                                 " on " + p.first);
@@ -807,9 +839,15 @@ static bool adapter_collect(const std::string &                                 
         if (m.w1 && gate_first && adapter_ends_with(module, ".ff_in", &ff_block)) {
             return fail("a gate first LoKr on ff_in cannot be merged");
         }
-        if (m.w1) {
-            bool factor = m.w2a && m.w2b;
-            if (factor == (m.w2 != nullptr) || m.w1->n_dims != 2) {
+        bool has_w1 = m.w1 || m.w1a || m.w1b;
+        if (!has_w1 && (m.w2 || m.w2a || m.w2b)) {
+            return fail("LoKr w2 without its w1 on " + module);
+        }
+        if (has_w1) {
+            bool factor    = m.w2a && m.w2b;
+            bool factor_w1 = m.w1a && m.w1b;
+            if (factor == (m.w2 != nullptr) || factor_w1 == (m.w1 != nullptr) ||
+                (m.w1 && m.w1->n_dims != 2)) {
                 return fail("incomplete LoKr module " + module);
             }
             std::vector<float> w1, w2;
@@ -842,11 +880,38 @@ static bool adapter_collect(const std::string &                                 
                 c = m.w2->shape[0];
                 d = m.w2->shape[1];
             }
-            if (!read(m.w1, &w1)) {
-                return fail("unsupported LoKr dtype on " + module);
+            int64_t a_rows, b_cols;
+            if (factor_w1) {
+                // W1 = w1_a @ w1_b, the same way
+                std::vector<float> w1a, w1b;
+                if (!read(m.w1a, &w1a) || !read(m.w1b, &w1b)) {
+                    return fail("unsupported LoKr dtype on " + module);
+                }
+                int64_t r1 = m.w1a->shape[1];
+                a_rows     = m.w1a->shape[0];
+                b_cols     = m.w1b->shape[1];
+                if (m.w1b->shape[0] != r1) {
+                    return fail("LoKr w1 rank mismatch on " + module);
+                }
+                if (r == 0) {
+                    r = r1;
+                }
+                w1.assign((size_t) (a_rows * b_cols), 0.0f);
+                for (int64_t i = 0; i < a_rows; i++) {
+                    for (int64_t k = 0; k < r1; k++) {
+                        float av = w1a[(size_t) (i * r1 + k)];
+                        for (int64_t j = 0; j < b_cols; j++) {
+                            w1[(size_t) (i * b_cols + j)] += av * w1b[(size_t) (k * b_cols + j)];
+                        }
+                    }
+                }
+            } else {
+                if (!read(m.w1, &w1)) {
+                    return fail("unsupported LoKr dtype on " + module);
+                }
+                a_rows = m.w1->shape[0];
+                b_cols = m.w1->shape[1];
             }
-            int64_t a_rows = m.w1->shape[0];
-            int64_t b_cols = m.w1->shape[1];
             // the rows this file holds for the module: a native split file
             // carries the w1 slice of its own projection already
             if (a_rows * c != total_rows) {
@@ -854,10 +919,10 @@ static bool adapter_collect(const std::string &                                 
                             " on " + module);
             }
             float dim     = lokr_dim > 0.0f ? lokr_dim : (float) r;
-            float scaling = user_scale * ((!factor || alpha <= 0.0f || dim <= 0.0f) ? 1.0f : alpha / dim);
+            float scaling = user_scale * ((!(factor || factor_w1) || alpha <= 0.0f || dim <= 0.0f) ? 1.0f : alpha / dim);
             int64_t row0  = 0;
             for (const auto & p : parts) {
-                struct ggml_tensor * t = ggml_get_tensor(gf.meta, (p.first + ".weight").c_str());
+                struct ggml_tensor * t = gf_meta(gf, (p.first + ".weight").c_str());
                 if (row0 % c != 0 || p.second % c != 0 || t->ne[0] != b_cols * d) {
                     return fail("LoKr blocks do not tile " + p.first);
                 }
@@ -879,7 +944,7 @@ static bool adapter_collect(const std::string &                                 
             if (!e) {
                 continue;
             }
-            struct ggml_tensor * t = ggml_get_tensor(gf.meta, id.c_str());
+            struct ggml_tensor * t = gf_meta(gf, id.c_str());
             if (!t || adapter_numel(*e) != ggml_nelements(t)) {
                 return fail("whole tensor of " + id + " does not match the model shape");
             }
@@ -906,6 +971,22 @@ static bool adapter_backend_can_encode(ggml_backend_t backend, enum ggml_type ty
     struct ggml_context *   ctx    = ggml_init(params);
     struct ggml_tensor *    src    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 32);
     struct ggml_tensor *    dst    = ggml_cast(ctx, src, type);
+    bool                    ok     = ggml_backend_supports_op(backend, dst);
+    ggml_free(ctx);
+    return ok;
+}
+
+// Whether the backend can decode a tensor type to F32 in the merge graph; the
+// CUDA copy kernels have no path from the K quants to F32
+static bool adapter_backend_can_decode(ggml_backend_t backend, enum ggml_type type) {
+    if (type == GGML_TYPE_F32) {
+        return true;
+    }
+    size_t                  meta   = ggml_tensor_overhead() * 4 + 1024;
+    struct ggml_init_params params = { meta, NULL, true };
+    struct ggml_context *   ctx    = ggml_init(params);
+    struct ggml_tensor *    src    = ggml_new_tensor_1d(ctx, type, ggml_blck_size(type));
+    struct ggml_tensor *    dst    = ggml_cast(ctx, src, GGML_TYPE_F32);
     bool                    ok     = ggml_backend_supports_op(backend, dst);
     ggml_free(ctx);
     return ok;
@@ -944,6 +1025,12 @@ static bool adapter_merge_tensor(WeightCtx *                      wctx,
         return false;
     }
     bool encode_ok = adapter_backend_can_encode(backend, ttype);
+    bool decode_ok = adapter_backend_can_decode(backend, ttype);
+    const struct ggml_type_traits * traits = ggml_get_type_traits(ttype);
+    if (!decode_ok && !traits->to_float) {
+        fprintf(stderr, "[Adapter] ERROR: cannot decode %s (%s) to merge into it\n", ggml_get_name(pc->tensor), ggml_type_name(ttype));
+        return false;
+    }
 
     size_t                  meta   = ggml_tensor_overhead() * (16 + 16 * terms.size()) + ggml_graph_overhead() + 64 * 1024;
     struct ggml_init_params params = { meta, NULL, true };
@@ -952,11 +1039,22 @@ static bool adapter_merge_tensor(WeightCtx *                      wctx,
         return false;
     }
 
-    struct ggml_tensor * tbase = ggml_new_tensor_2d(ctx, ttype, ne0, ne1);
-    struct ggml_tensor * tbf   = ttype == GGML_TYPE_F32 ? tbase : ggml_cast(ctx, tbase, GGML_TYPE_F32);
-    struct ggml_tensor * acc   = tbf;
-
     std::vector<std::pair<struct ggml_tensor *, const std::vector<float> *>> uploads;
+    // a type the backend cannot decode is decoded here and goes up as F32
+    std::vector<float>   host_base;
+    struct ggml_tensor * tbase = nullptr;
+    struct ggml_tensor * tbf   = nullptr;
+    if (decode_ok) {
+        tbase = ggml_new_tensor_2d(ctx, ttype, ne0, ne1);
+        tbf   = ttype == GGML_TYPE_F32 ? tbase : ggml_cast(ctx, tbase, GGML_TYPE_F32);
+    } else {
+        host_base.resize((size_t) (ne0 * ne1));
+        traits->to_float(pc->src, host_base.data(), ne0 * ne1);
+        tbf = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne0, ne1);
+        uploads.push_back({ tbf, &host_base });
+    }
+    struct ggml_tensor * acc = tbf;
+
     for (const auto & t : terms) {
         struct ggml_tensor * delta = nullptr;
         if (t.kind == ROLE_LORA_A) {
@@ -1005,15 +1103,22 @@ static bool adapter_merge_tensor(WeightCtx *                      wctx,
         ggml_free(ctx);
         return false;
     }
-    ggml_backend_tensor_set(tbase, pc->src, 0, base_nb);
+    if (tbase) {
+        ggml_backend_tensor_set(tbase, pc->src, 0, base_nb);
+    }
     for (const auto & u : uploads) {
         ggml_backend_tensor_set(u.first, u.second->data(), 0, u.second->size() * sizeof(float));
     }
-    ggml_backend_graph_compute(backend, graph);
+    if (ggml_backend_graph_compute(backend, graph) != GGML_STATUS_SUCCESS) {
+        fprintf(stderr, "[Adapter] ERROR: merging into %s failed on the backend\n", ggml_get_name(pc->tensor));
+        ggml_backend_buffer_free(buf);
+        ggml_free(ctx);
+        return false;
+    }
 
-    size_t n_floats = (std::max)(base_nb, (size_t) (ne0 * ne1) * sizeof(float)) / sizeof(float) + 1;
-    auto   staging  = std::make_unique<float[]>(n_floats);
-    bool   ok       = true;
+    // the staged bytes are the tensor's own size; the F32 result has its own buffer
+    std::unique_ptr<float[]> staging(new float[base_nb / sizeof(float) + 1]);
+    bool                     ok = true;
     if (encode_ok || ttype == GGML_TYPE_F32) {
         ggml_backend_tensor_get(tout, staging.get(), 0, base_nb);
     } else {
@@ -1051,13 +1156,18 @@ static bool adapter_apply(WeightCtx *                      wctx,
             fprintf(stderr, "[Adapter] ERROR: no .safetensors in %s\n", spec.path.c_str());
             return false;
         }
-        // adapter_config.json sits in the adapter directory, or beside a lone file
-        std::string dir = spec.path;
-        if (!adapter_is_dir(spec.path)) {
-            size_t sep = spec.path.find_last_of("/\\");
-            dir        = sep == std::string::npos ? "." : spec.path.substr(0, sep);
+        // adapter_config.json belongs to an adapter directory; a lone file
+        // beside others carries its settings in its own keys and metadata
+        AdapterConfig config = adapter_is_dir(spec.path) ? adapter_read_config(spec.path) : AdapterConfig{};
+        if (!config.refused.empty()) {
+            fprintf(stderr, "[Adapter] ERROR: %s: %s\n", spec.path.c_str(), config.refused.c_str());
+            return false;
         }
-        AdapterConfig config = adapter_read_config(dir);
+        AdapterInfo info = adapter_inspect(spec.path);
+        if (info.ignored > 0) {
+            fprintf(stderr, "[Adapter] WARNING: %d keys of %s name nothing in the model, the first %s\n", info.ignored,
+                    spec.path.c_str(), info.first_ignored.c_str());
+        }
 
         // two files of one adapter touching one tensor would apply it twice
         std::map<std::string, std::vector<AdapterTerm>> own;
@@ -1076,6 +1186,10 @@ static bool adapter_apply(WeightCtx *                      wctx,
                 }
                 own[kv.first] = std::move(kv.second);
             }
+        }
+        if (own.empty()) {
+            fprintf(stderr, "[Adapter] ERROR: %s changes nothing in the %s\n", spec.path.c_str(), tag);
+            return false;
         }
         for (auto & kv : own) {
             auto & dst = terms[kv.first];
@@ -1103,7 +1217,7 @@ static bool adapter_apply(WeightCtx *                      wctx,
     int merged = 0;
     for (const auto & kv : terms) {
         const std::string &  name = kv.first;
-        struct ggml_tensor * meta = ggml_get_tensor(gf.meta, name.c_str());
+        struct ggml_tensor * meta = gf_meta(gf, name.c_str());
         if (!meta) {
             fprintf(stderr, "[Adapter] ERROR: the model has no tensor %s\n", name.c_str());
             return false;

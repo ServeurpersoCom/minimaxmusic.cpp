@@ -145,6 +145,7 @@ inline bool DiT::load(const char * gguf_path, const std::vector<AdapterSpec> & a
 
     if (!adapter_apply(&wctx, gf, ADAPTER_DIT, adapters, backend)) {
         gf_close(&gf);
+        free();
         return false;
     }
     if (!wctx_alloc(&wctx, backend)) {

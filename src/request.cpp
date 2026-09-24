@@ -49,7 +49,7 @@ static inline std::string yy_str(yyjson_val * v) {
 }
 
 // populate MM3Request fields from a yyjson object (must be pre-initialized)
-static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
+static bool request_parse_obj(yyjson_val * obj, MM3Request * r) {
     yyjson_val * v;
 
     if ((v = yyjson_obj_get(obj, "caption")) && yyjson_is_str(v)) {
@@ -122,10 +122,16 @@ static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
         size_t       idx, max;
         yyjson_val * item;
         yyjson_arr_foreach(v, idx, max, item) {
-            yyjson_val *      f;
+            yyjson_val * f;
             MM3RequestAdapter a;
-            if (!yyjson_is_obj(item) || !(f = yyjson_obj_get(item, "name")) || !yyjson_is_str(f)) {
+            if (yyjson_is_str(item) && yyjson_get_len(item) > 0) {
+                a.name = yy_str(item);
+                r->adapters.push_back(a);
                 continue;
+            }
+            if (!yyjson_is_obj(item) || !(f = yyjson_obj_get(item, "name")) || !yyjson_is_str(f) || yyjson_get_len(f) == 0) {
+                fprintf(stderr, "[Request] ERROR: an adapter needs a name\n");
+                return false;
             }
             a.name = yy_str(f);
             if ((f = yyjson_obj_get(item, "scale")) && yyjson_is_num(f)) {
@@ -148,6 +154,7 @@ static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
         }
         r->adapters.push_back(a);
     }
+    return true;
 }
 
 bool request_parse_json(MM3Request * r, const char * json) {
@@ -160,9 +167,9 @@ bool request_parse_json(MM3Request * r, const char * json) {
         yyjson_doc_free(doc);
         return false;
     }
-    request_parse_obj(root, r);
+    bool ok = request_parse_obj(root, r);
     yyjson_doc_free(doc);
-    return true;
+    return ok;
 }
 
 // read a whole file into a string, empty on failure
@@ -192,7 +199,7 @@ bool request_parse(MM3Request * r, const char * path) {
         return false;
     }
     if (!request_parse_json(r, json.c_str())) {
-        fprintf(stderr, "[Request] ERROR: malformed JSON in %s\n", path);
+        fprintf(stderr, "[Request] ERROR: %s is not a valid request\n", path);
         return false;
     }
     fprintf(stderr, "[Request] Parsed %s\n", path);

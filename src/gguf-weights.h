@@ -20,6 +20,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #ifdef _WIN32
@@ -31,9 +32,20 @@
 #    include <unistd.h>
 #endif
 
+// A tensor under the name the loaders ask for when the file names it
+// otherwise: the llama.cpp style layout of the HOT-Step converter
+// (scragnog/MiniMax-Music3-GGUF). The DiT's q, k and v are row ranges of its
+// fused qkv there.
+struct GGUFAlias {
+    struct ggml_tensor * meta;  // canonical name, the shape a loader sees
+    const void *         data;
+};
+
 struct GGUFModel {
     struct gguf_context * gguf;         // parsed header (KV + tensor metadata)
     struct ggml_context * meta;         // tensor descriptors (no data)
+    struct ggml_context * alias_meta;   // descriptors of the aliases
+    std::unordered_map<std::string, GGUFAlias> aliases;
     uint8_t *             mapping;      // mmapped file
     size_t                file_size;
     size_t                data_offset;  // gguf_get_data_offset(gguf)
@@ -51,6 +63,9 @@ static void gf_close(GGUFModel * gf) {
     }
     if (gf->meta) {
         ggml_free(gf->meta);
+    }
+    if (gf->alias_meta) {
+        ggml_free(gf->alias_meta);
     }
 #ifdef _WIN32
     if (gf->mapping) {
@@ -71,6 +86,174 @@ static void gf_close(GGUFModel * gf) {
     }
 #endif
     *gf = {};
+}
+
+// The canonical names of one tensor of a HOT-Step layout file, with the row
+// part each takes (-1 the whole tensor, 0..2 the q, k or v third)
+static void gf_hotstep_names(const std::string & name, std::vector<std::pair<std::string, int>> * out) {
+    auto starts = [&](const char * prefix, std::string * rest) {
+        size_t n = strlen(prefix);
+        if (name.compare(0, n, prefix) != 0) {
+            return false;
+        }
+        *rest = name.substr(n);
+        return true;
+    };
+    // "N.tail" -> N, tail
+    auto layer = [](const std::string & rest, std::string * idx, std::string * tail) {
+        size_t dot = rest.find('.');
+        if (dot == std::string::npos || dot == 0) {
+            return false;
+        }
+        for (size_t i = 0; i < dot; i++) {
+            if (rest[i] < '0' || rest[i] > '9') {
+                return false;
+            }
+        }
+        *idx  = rest.substr(0, dot);
+        *tail = rest.substr(dot + 1);
+        return true;
+    };
+    auto map_tail = [](const std::string & tail, const std::vector<std::pair<const char *, const char *>> & table,
+                       std::string * mapped) {
+        for (const auto & e : table) {
+            size_t n = strlen(e.first);
+            if (tail.compare(0, n, e.first) == 0 && tail.size() > n && tail[n] == '.') {
+                *mapped = std::string(e.second) + tail.substr(n);
+                return true;
+            }
+        }
+        return false;
+    };
+    std::string rest, idx, tail, mapped;
+
+    // language model
+    if (name == "token_embd.weight") {
+        out->push_back({ "model.embed_tokens.weight", -1 });
+    } else if (name == "output.weight") {
+        out->push_back({ "lm_head.weight", -1 });
+    } else if (name == "output_norm.weight") {
+        out->push_back({ "model.norm.weight", -1 });
+    } else if (starts("blk.", &rest) && layer(rest, &idx, &tail)) {
+        static const std::vector<std::pair<const char *, const char *>> lm = {
+            { "attn_norm", "input_layernorm" },       { "attn_q_norm", "self_attn.q_norm" },
+            { "attn_k_norm", "self_attn.k_norm" },    { "attn_q", "self_attn.q_proj" },
+            { "attn_k", "self_attn.k_proj" },         { "attn_v", "self_attn.v_proj" },
+            { "attn_output", "self_attn.o_proj" },    { "ffn_norm", "post_attention_layernorm" },
+            { "ffn_gate", "mlp.gate_proj" },          { "ffn_up", "mlp.up_proj" },
+            { "ffn_down", "mlp.down_proj" },
+        };
+        if (map_tail(tail, lm, &mapped)) {
+            out->push_back({ "model.layers." + idx + "." + mapped, -1 });
+        }
+    }
+    // RVQ depth decoder
+    else if (starts("depth.", &rest)) {
+        static const std::vector<std::pair<const char *, const char *>> top = {
+            { "proj", "projection" },       { "pos_embd", "pos_embedding" },
+            { "output_norm", "norm" },      { "audio_embd", "audio_embeddings" },
+        };
+        static const std::vector<std::pair<const char *, const char *>> blk = {
+            { "attn_norm", "input_layernorm" }, { "attn_q", "attn.to_q" },     { "attn_k", "attn.to_k" },
+            { "attn_v", "attn.to_v" },          { "attn_output", "attn.to_out" }, { "ffn_norm", "post_attention_layernorm" },
+            { "ffn_gate", "gate_proj" },        { "ffn_up", "up_proj" },       { "ffn_down", "down_proj" },
+        };
+        std::string r2;
+        if (map_tail(rest, top, &mapped)) {
+            out->push_back({ mapped, -1 });
+        } else if (rest.compare(0, 5, "head.") == 0) {
+            out->push_back({ "audio_heads." + rest.substr(5), -1 });
+        } else if (rest.compare(0, 4, "blk.") == 0 && layer(rest.substr(4), &idx, &tail) && map_tail(tail, blk, &mapped)) {
+            out->push_back({ "layers." + idx + "." + mapped, -1 });
+        }
+    }
+    // DiT
+    else if (starts("dit.", &rest)) {
+        static const std::vector<std::pair<const char *, const char *>> top = {
+            { "preprocess_conv", "preprocess_conv" }, { "postprocess_conv", "postprocess_conv" },
+            { "time_fourier", "time_proj" },          { "time_embd.0", "time_embed.linear_1" },
+            { "time_embd.1", "time_embed.linear_2" }, { "proj_in", "proj_in" },
+            { "proj_out", "proj_out" },
+        };
+        static const std::vector<std::pair<const char *, const char *>> blk = {
+            { "attn_norm", "norm1" },  { "attn_output", "attn.to_out.0" }, { "ffn_norm", "norm2" },
+            { "ffn_in", "ff_in" },     { "ffn_out", "ff_out" },
+        };
+        if (map_tail(rest, top, &mapped)) {
+            out->push_back({ mapped, -1 });
+        } else if (rest.compare(0, 4, "blk.") == 0 && layer(rest.substr(4), &idx, &tail)) {
+            std::string p = "transformer_blocks." + idx + ".";
+            if (tail == "attn_qkv.weight") {
+                out->push_back({ p + "attn.to_q.weight", 0 });
+                out->push_back({ p + "attn.to_k.weight", 1 });
+                out->push_back({ p + "attn.to_v.weight", 2 });
+            } else if (map_tail(tail, blk, &mapped)) {
+                out->push_back({ p + mapped, -1 });
+            }
+        }
+    }
+}
+
+// Aliases for a file in the HOT-Step layout; a file already in the names the
+// loaders use gets none
+static bool gf_build_aliases(GGUFModel * gf) {
+    int64_t n = gguf_get_n_tensors(gf->gguf);
+    struct Plan {
+        std::string          canonical;
+        struct ggml_tensor * src;
+        size_t               offset;
+        int                  part;
+    };
+    std::vector<Plan> plan;
+    for (int64_t i = 0; i < n; i++) {
+        const char * tname = gguf_get_tensor_name(gf->gguf, i);
+        std::vector<std::pair<std::string, int>> names;
+        gf_hotstep_names(tname, &names);
+        for (const auto & c : names) {
+            if (gguf_find_tensor(gf->gguf, c.first.c_str()) < 0) {
+                plan.push_back({ c.first, ggml_get_tensor(gf->meta, tname), gguf_get_tensor_offset(gf->gguf, i), c.second });
+            }
+        }
+    }
+    if (plan.empty()) {
+        return true;
+    }
+    struct ggml_init_params params = { ggml_tensor_overhead() * (plan.size() + 1), NULL, true };
+    gf->alias_meta                 = ggml_init(params);
+    if (!gf->alias_meta) {
+        return false;
+    }
+    for (const auto & p : plan) {
+        int64_t ne[4] = { 1, 1, 1, 1 };
+        int     nd    = ggml_n_dims(p.src);
+        for (int d = 0; d < nd; d++) {
+            ne[d] = p.src->ne[d];
+        }
+        const uint8_t * data = gf->mapping + gf->data_offset + p.offset;
+        if (p.part >= 0) {
+            if (nd != 2 || ne[1] % 3 != 0) {
+                fprintf(stderr, "[GGUF] FATAL: %s is not a fused qkv of three equal parts\n", ggml_get_name(p.src));
+                return false;
+            }
+            ne[1] /= 3;
+            data += (size_t) p.part * (size_t) ne[1] * ggml_row_size(p.src->type, ne[0]);
+        }
+        struct ggml_tensor * t = ggml_new_tensor(gf->alias_meta, p.src->type, nd, ne);
+        ggml_set_name(t, p.canonical.c_str());
+        gf->aliases[p.canonical] = { t, data };
+    }
+    fprintf(stderr, "[GGUF] HOT-Step layout: %zu tensors read under their MiniMax names\n", plan.size());
+    return true;
+}
+
+// A tensor's descriptor by the name the loaders use, NULL when absent
+static struct ggml_tensor * gf_meta(const GGUFModel & gf, const char * name) {
+    struct ggml_tensor * t = ggml_get_tensor(gf.meta, name);
+    if (t) {
+        return t;
+    }
+    auto it = gf.aliases.find(name);
+    return it == gf.aliases.end() ? NULL : it->second.meta;
 }
 
 static bool gf_load(GGUFModel * gf, const char * path) {
@@ -151,6 +334,11 @@ static bool gf_load(GGUFModel * gf, const char * path) {
         }
     }
 
+    if (!gf_build_aliases(gf)) {
+        gf_close(gf);
+        return false;
+    }
+
     fprintf(stderr, "[GGUF] %s: %lld tensors, data at offset %zu\n", path, (long long) n, gf->data_offset);
     return true;
 }
@@ -158,21 +346,16 @@ static bool gf_load(GGUFModel * gf, const char * path) {
 // Load a tensor from GGUF into the weight context.
 // Returns ggml_tensor (not yet backed by memory; call wctx_alloc after all loads).
 // Tensor shapes are already in ggml order (ne[0]=innermost).
+static const void * gf_get_data(const GGUFModel & gf, const char * name);
+
 static struct ggml_tensor * gf_load_tensor(WeightCtx *         wctx,
                                            const GGUFModel &   gf,
                                            const std::string & name,
                                            const int64_t *     shape_override  = nullptr,
                                            int                 n_dims_override = 0) {
-    int64_t idx = gguf_find_tensor(gf.gguf, name.c_str());
-    if (idx < 0) {
-        fprintf(stderr, "[GGUF] FATAL: tensor '%s' not found\n", name.c_str());
-        exit(1);
-    }
-
-    // Get metadata from the context populated by gguf_init_from_file
-    struct ggml_tensor * src = ggml_get_tensor(gf.meta, name.c_str());
+    struct ggml_tensor * src = gf_meta(gf, name.c_str());
     if (!src) {
-        fprintf(stderr, "[GGUF] FATAL: tensor '%s' not in meta context\n", name.c_str());
+        fprintf(stderr, "[GGUF] FATAL: tensor '%s' not found\n", name.c_str());
         exit(1);
     }
 
@@ -194,8 +377,7 @@ static struct ggml_tensor * gf_load_tensor(WeightCtx *         wctx,
     struct ggml_tensor * tensor = ggml_new_tensor(wctx->ctx, src->type, n_dims, ne);
     ggml_set_name(tensor, name.c_str());
 
-    size_t       offset = gguf_get_tensor_offset(gf.gguf, idx);
-    const void * data   = gf.mapping + gf.data_offset + offset;
+    const void * data   = gf_get_data(gf, name.c_str());
     size_t       nbytes = ggml_nbytes(src);
 
     wctx->pending.push_back({ tensor, data, nbytes, 0 });
@@ -208,7 +390,8 @@ static struct ggml_tensor * gf_load_tensor(WeightCtx *         wctx,
 static const void * gf_get_data(const GGUFModel & gf, const char * name) {
     int64_t idx = gguf_find_tensor(gf.gguf, name);
     if (idx < 0) {
-        return NULL;
+        auto it = gf.aliases.find(name);
+        return it == gf.aliases.end() ? NULL : it->second.data;
     }
     size_t offset = gguf_get_tensor_offset(gf.gguf, idx);
     return gf.mapping + gf.data_offset + offset;
@@ -216,7 +399,7 @@ static const void * gf_get_data(const GGUFModel & gf, const char * name) {
 
 // Read a whole tensor into a host F32 vector (F32 passthrough, BF16 converted).
 static bool gf_host_f32(const GGUFModel & gf, const char * name, std::vector<float> & dst) {
-    struct ggml_tensor * mt  = ggml_get_tensor(gf.meta, name);
+    struct ggml_tensor * mt  = gf_meta(gf, name);
     const void *         raw = gf_get_data(gf, name);
     if (!mt || !raw) {
         return false;
@@ -238,13 +421,12 @@ static bool gf_host_f32(const GGUFModel & gf, const char * name, std::vector<flo
 // Load tensor, converting to F32 at load time (eliminates runtime cast nodes).
 // Best for small tensors: norms [H], QK-norms [D], scale_shift_table [H,6], biases.
 static struct ggml_tensor * gf_load_tensor_f32(WeightCtx * wctx, const GGUFModel & gf, const std::string & name) {
-    int64_t idx = gguf_find_tensor(gf.gguf, name.c_str());
-    if (idx < 0) {
+    struct ggml_tensor * src = gf_meta(gf, name.c_str());
+    if (!src) {
         fprintf(stderr, "[GGUF] FATAL: tensor '%s' not found\n", name.c_str());
         exit(1);
     }
-    struct ggml_tensor * src    = ggml_get_tensor(gf.meta, name.c_str());
-    int                  n_dims = ggml_n_dims(src);
+    int     n_dims = ggml_n_dims(src);
     int64_t              ne[4]  = { 1, 1, 1, 1 };
     for (int i = 0; i < n_dims; i++) {
         ne[i] = src->ne[i];
@@ -273,8 +455,7 @@ static struct ggml_tensor * gf_load_tensor_f32(WeightCtx * wctx, const GGUFModel
     auto    buf  = std::make_unique<float[]>(n);
     float * data = buf.get();
 
-    size_t       offset = gguf_get_tensor_offset(gf.gguf, idx);
-    const void * raw    = gf.mapping + gf.data_offset + offset;
+    const void * raw = gf_get_data(gf, name.c_str());
 
     traits->to_float(raw, data, (int64_t) n);
 
@@ -291,9 +472,9 @@ static struct ggml_tensor * gf_load_qkv_fused(WeightCtx *         wctx,
                                               const std::string & q_name,
                                               const std::string & k_name,
                                               const std::string & v_name) {
-    struct ggml_tensor * q_src = ggml_get_tensor(gf.meta, q_name.c_str());
-    struct ggml_tensor * k_src = ggml_get_tensor(gf.meta, k_name.c_str());
-    struct ggml_tensor * v_src = ggml_get_tensor(gf.meta, v_name.c_str());
+    struct ggml_tensor * q_src = gf_meta(gf, q_name.c_str());
+    struct ggml_tensor * k_src = gf_meta(gf, k_name.c_str());
+    struct ggml_tensor * v_src = gf_meta(gf, v_name.c_str());
     if (!q_src || !k_src || !v_src) {
         fprintf(stderr, "[GGUF] FATAL: QKV tensor not found: %s / %s / %s\n", q_name.c_str(), k_name.c_str(),
                 v_name.c_str());
@@ -315,11 +496,7 @@ static struct ggml_tensor * gf_load_qkv_fused(WeightCtx *         wctx,
     size_t k_bytes  = k_src->ne[1] * row_size;
     size_t v_bytes  = v_src->ne[1] * row_size;
 
-    auto get_data = [&](const std::string & name) -> const void * {
-        int64_t idx = gguf_find_tensor(gf.gguf, name.c_str());
-        size_t  off = gguf_get_tensor_offset(gf.gguf, idx);
-        return gf.mapping + gf.data_offset + off;
-    };
+    auto get_data = [&](const std::string & name) -> const void * { return gf_get_data(gf, name.c_str()); };
 
     wctx->pending.push_back({ fused, get_data(q_name), q_bytes, 0 });
     wctx->pending.push_back({ fused, get_data(k_name), k_bytes, q_bytes });
@@ -333,8 +510,8 @@ static struct ggml_tensor * gf_load_pair_fused(WeightCtx *         wctx,
                                                const GGUFModel &   gf,
                                                const std::string & a_name,
                                                const std::string & b_name) {
-    struct ggml_tensor * a_src = ggml_get_tensor(gf.meta, a_name.c_str());
-    struct ggml_tensor * b_src = ggml_get_tensor(gf.meta, b_name.c_str());
+    struct ggml_tensor * a_src = gf_meta(gf, a_name.c_str());
+    struct ggml_tensor * b_src = gf_meta(gf, b_name.c_str());
     if (!a_src || !b_src) {
         return NULL;
     }
@@ -350,11 +527,7 @@ static struct ggml_tensor * gf_load_pair_fused(WeightCtx *         wctx,
     size_t a_bytes  = a_src->ne[1] * row_size;
     size_t b_bytes  = b_src->ne[1] * row_size;
 
-    auto get_data = [&](const std::string & name) -> const void * {
-        int64_t idx = gguf_find_tensor(gf.gguf, name.c_str());
-        size_t  off = gguf_get_tensor_offset(gf.gguf, idx);
-        return gf.mapping + gf.data_offset + off;
-    };
+    auto get_data = [&](const std::string & name) -> const void * { return gf_get_data(gf, name.c_str()); };
 
     wctx->pending.push_back({ fused, get_data(a_name), a_bytes, 0 });
     wctx->pending.push_back({ fused, get_data(b_name), b_bytes, a_bytes });

@@ -294,6 +294,38 @@ static bool st_open(STFile * st, const char * path) {
         return false;
     }
 
+    // every tensor inside the file, with as many bytes as its shape needs: a
+    // file still being copied must not be read past its end
+    for (const auto & e : st->entries) {
+        size_t elsize = 0;
+        if (e.dtype == "F64" || e.dtype == "I64" || e.dtype == "U64") {
+            elsize = 8;
+        } else if (e.dtype == "F32" || e.dtype == "I32" || e.dtype == "U32") {
+            elsize = 4;
+        } else if (e.dtype == "F16" || e.dtype == "BF16" || e.dtype == "I16" || e.dtype == "U16") {
+            elsize = 2;
+        } else if (e.dtype == "I8" || e.dtype == "U8" || e.dtype == "BOOL" || e.dtype.rfind("F8", 0) == 0) {
+            elsize = 1;
+        }
+        bool   fits = e.data_start <= e.data_end && e.data_end <= st->file_size - st->data_offset;
+        size_t n    = 1;
+        for (int i = 0; i < e.n_dims && fits; i++) {
+            if (e.shape[i] < 0 || (e.shape[i] > 0 && n > SIZE_MAX / (size_t) e.shape[i])) {
+                fits = false;
+            } else {
+                n *= (size_t) e.shape[i];
+            }
+        }
+        if (fits && elsize > 0 && (n > SIZE_MAX / elsize || n * elsize != e.data_end - e.data_start)) {
+            fits = false;
+        }
+        if (!fits) {
+            fprintf(stderr, "[Safetensors] %s: tensor %s does not fit the file\n", path, e.name.c_str());
+            st_close(st);
+            return false;
+        }
+    }
+
     fprintf(stderr, "[Safetensors] %s: %zu tensors\n", path, st->entries.size());
     return true;
 }

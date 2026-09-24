@@ -103,7 +103,36 @@ static BackendPair backend_init(const char * label) {
         return g_backend_cache;
     }
 
+    // A release ships one CUDA backend per toolkit, each in a folder of its
+    // own, and the launcher names the one this card and driver run in
+    // MM3_CUDA_BACKEND. Loaded before the rest, so its devices outrank
+    // Vulkan's as they do from the default place.
+    static bool  cuda_loaded  = false;
+    const char * cuda_backend = std::getenv("MM3_CUDA_BACKEND");
+    if (!cuda_loaded && cuda_backend && cuda_backend[0]) {
+        if (!ggml_backend_load(cuda_backend)) {
+            fprintf(stderr, "[Load] FATAL: MM3_CUDA_BACKEND=%s did not load\n", cuda_backend);
+            exit(1);
+        }
+        cuda_loaded = true;
+    }
     ggml_backend_load_all();
+    // An update over an older install can leave a ggml-cuda.dll beside the
+    // executable: the named backend stays, a second CUDA goes
+    if (cuda_loaded) {
+        bool first = true;
+        for (size_t i = 0; i < ggml_backend_reg_count();) {
+            ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+            if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0 && !first) {
+                ggml_backend_unload(reg);
+                continue;
+            }
+            if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0) {
+                first = false;
+            }
+            i++;
+        }
+    }
     BackendPair bp = {};
 
     // GGML_BACKEND env var: force a specific device instead of auto-best.

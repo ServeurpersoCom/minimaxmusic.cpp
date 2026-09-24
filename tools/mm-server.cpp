@@ -878,6 +878,12 @@ int main(int argc, char ** argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
+    // The device is chosen and tested before the server listens: a device
+    // that cannot run the engine fails the start, where the launcher can move
+    // on to the next one, instead of the first song. Held for the process
+    // lifetime, so every module shares it.
+    BackendPair device = backend_init("Device");
+
     // start FIFO worker thread (processes all GPU jobs in order)
     std::thread worker(worker_main);
 
@@ -902,6 +908,7 @@ int main(int argc, char ** argv) {
     active_job_cancel();
     cv_work.notify_one();
     worker.join();
+    backend_release(device.backend, device.cpu_backend);
 
     store_free(g_pipeline.store);
     fprintf(stderr, "[Server] Done\n");

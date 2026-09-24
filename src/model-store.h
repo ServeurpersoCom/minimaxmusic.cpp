@@ -72,11 +72,11 @@ enum ModelKind {
 };
 
 struct ModelKey {
-    ModelKind   kind;
-    std::string path;  // GGUF path the module is loaded from
+    ModelKind                kind;
+    std::string              path;  // GGUF path the module is loaded from
     // LM-only extras (ignored for other kinds):
-    int         max_seq;    // KV cache length, 0 = model context
-    int         n_kv_sets;  // number of KV sets (2 * max_batch with CFG)
+    int                      max_seq;    // KV cache length, 0 = model context
+    int                      n_kv_sets;  // number of KV sets (2 * max_batch with CFG)
     // LM and DiT: the adapters merged into that module
     std::vector<AdapterSpec> adapters;
 };

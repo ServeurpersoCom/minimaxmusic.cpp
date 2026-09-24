@@ -47,10 +47,10 @@ static void print_usage(const char * argv0) {
 }
 
 int main(int argc, char ** argv) {
-    std::string       models, out_path = "out.mp3", request_path, adapters_dir;
+    std::string                    models, out_path = "out.mp3", request_path, adapters_dir;
     std::vector<MM3RequestAdapter> cli_adapters;
-    MM3Request        req;
-    MM3PipelineParams params;
+    MM3Request                     req;
+    MM3PipelineParams              params;
     request_init(&req);
     req.seed    = 42;
     req.lm_seed = 42;

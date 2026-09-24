@@ -122,14 +122,15 @@ static bool request_parse_obj(yyjson_val * obj, MM3Request * r) {
         size_t       idx, max;
         yyjson_val * item;
         yyjson_arr_foreach(v, idx, max, item) {
-            yyjson_val * f;
+            yyjson_val *      f;
             MM3RequestAdapter a;
             if (yyjson_is_str(item) && yyjson_get_len(item) > 0) {
                 a.name = yy_str(item);
                 r->adapters.push_back(a);
                 continue;
             }
-            if (!yyjson_is_obj(item) || !(f = yyjson_obj_get(item, "name")) || !yyjson_is_str(f) || yyjson_get_len(f) == 0) {
+            if (!yyjson_is_obj(item) || !(f = yyjson_obj_get(item, "name")) || !yyjson_is_str(f) ||
+                yyjson_get_len(f) == 0) {
                 fprintf(stderr, "[Request] ERROR: an adapter needs a name\n");
                 return false;
             }

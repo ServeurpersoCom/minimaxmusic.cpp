@@ -51,7 +51,7 @@ struct MM3Pipeline {
     MM3ModelPaths     wanted;           // empty strings until the first configure
     MM3PipelineParams params;
     DebugDumper       dumper = {};
-    std::string       adapters_dir;     // where request adapter names resolve, empty without one
+    std::string       adapters_dir;  // where request adapter names resolve, empty without one
 
     // The adapters of the running request, as the store keys the LM and the DiT
     std::vector<AdapterSpec> lm_adapters;

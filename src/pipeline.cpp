@@ -195,8 +195,8 @@ static float pipeline_flow_shift(float requested, int steps) {
 }
 
 static Qwen3LM * require_lm(MM3Pipeline * p) {
-    ModelKey k = { MODEL_LM, p->wanted.lm, p->params.max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch),
-                   p->lm_adapters };
+    ModelKey  k = { MODEL_LM, p->wanted.lm, p->params.max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch),
+                    p->lm_adapters };
     Qwen3LM * m = store_require_lm(p->store, k);
     if (m) {
         if (!p->params.use_fa) {

@@ -256,9 +256,8 @@ static struct ggml_tensor * dit_build_graph(struct ggml_context * ctx, DiT * m, 
     int S = T + 1;
 
     // Channel concat [latent, zeros, condition] -> [2304, T]
-    struct ggml_tensor * zeros = ggml_scale(ctx, m->in_xt, 0.0f);
-    struct ggml_tensor * x     = ggml_concat(ctx, m->in_xt, zeros, 0);
-    x                          = ggml_concat(ctx, x, m->in_cond, 0);
+    struct ggml_tensor * x = ggml_pad_ext(ctx, m->in_xt, 0, DiT::IN_CH, 0, 0, 0, 0, 0, 0);
+    x                      = ggml_concat(ctx, x, m->in_cond, 0);
 
     // Residual k=1 convs as mul_mat
     x = ggml_add(ctx, ggml_mul_mat(ctx, m->pre_w, x), x);

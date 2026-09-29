@@ -33,6 +33,9 @@ static void print_usage(const char * argv0) {
             "  --steps <N>            Euler steps per DiT window\n"
             "  --seed <N>             DiT noise seed\n"
             "  --lm-seed <N>          Autoregressive sampling seed\n"
+            "  --adapters <dir>       Directory the request's adapters are named in\n"
+            "  --adapter <name>       Merge one adapter of that directory (repeatable)\n"
+            "  --adapter-scale <f>    Strength of the last --adapter (default 1.0)\n"
             "\n"
             "Debug:\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
@@ -44,9 +47,10 @@ static void print_usage(const char * argv0) {
 }
 
 int main(int argc, char ** argv) {
-    std::string       models, out_path = "out.mp3", request_path;
-    MM3Request        req;
-    MM3PipelineParams params;
+    std::string                    models, out_path = "out.mp3", request_path, adapters_dir;
+    std::vector<MM3RequestAdapter> cli_adapters;
+    MM3Request                     req;
+    MM3PipelineParams              params;
     request_init(&req);
     req.seed    = 42;
     req.lm_seed = 42;
@@ -86,6 +90,14 @@ int main(int argc, char ** argv) {
             params.clamp_fp16 = true;
         } else if (a == "--dump" && i + 1 < argc) {
             params.dump_dir = argv[++i];
+        } else if (a == "--adapters" && i + 1 < argc) {
+            adapters_dir = argv[++i];
+        } else if (a == "--adapter" && i + 1 < argc) {
+            MM3RequestAdapter one;
+            one.name = argv[++i];
+            cli_adapters.push_back(one);
+        } else if (a == "--adapter-scale" && i + 1 < argc && !cli_adapters.empty()) {
+            cli_adapters.back().scale = (float) atof(argv[++i]);
         } else {
             print_usage(argv[0]);
             return 1;
@@ -94,6 +106,7 @@ int main(int argc, char ** argv) {
     if (!request_path.empty() && !request_parse(&req, request_path.c_str())) {
         return 1;
     }
+    req.adapters.insert(req.adapters.end(), cli_adapters.begin(), cli_adapters.end());
     if (models.empty()) {
         print_usage(argv[0]);
         return 1;
@@ -122,7 +135,8 @@ int main(int argc, char ** argv) {
     // coexistence group resident, the LM and the DiT never overlap.
     ModelStore * store = store_create(EVICT_STRICT);
     MM3Pipeline  pipeline;
-    pipeline.store = store;
+    pipeline.store        = store;
+    pipeline.adapters_dir = adapters_dir;
     pipeline_configure(&pipeline, paths, params);
 
     bool      is_mp3  = true;

@@ -101,6 +101,51 @@ swap in and out per job, so the LM and the DiT never coexist. Pass
 `--keep-loaded` to keep every model resident instead; switching one quant
 in the UI then loads only that model, the others stay warm.
 
+## Adapters
+
+Community LoRAs for the planner LM and for the flow DiT load at request
+time. Point the server at a directory with `--adapters <dir>` and name its
+entries in the request:
+
+```json
+"adapters": [
+    { "name": "reggae.safetensors", "scale": 1.0 },
+    { "name": "my-artist", "lm_scale": 1.0, "dit_scale": 0.5 }
+]
+```
+
+An entry is a `.safetensors` file or a directory of them (a PEFT
+`adapter_model.safetensors` with its `adapter_config.json`). The LM plans
+the song, so its adapters change the composition, the vocal line and where
+the song ends; the DiT renders the sound, so its adapters change the timbre.
+`scale` applies to both, `lm_scale` and `dit_scale` override it for one, and
+a model an adapter does not touch is not reloaded when that adapter changes.
+
+The factors are merged into the weights while the model loads, before the
+LM projections are fused, every contribution to a tensor summed in one
+backend graph and encoded back to the GGUF type once. Read are SimpleTuner's
+diffusers keys (`transformer.transformer_blocks.N.attn.to_q`) and ComfyUI
+keys (`diffusion_model.diffusion_transformer.transformer.layers.N.self_attn.to_qkv`,
+split back onto q, k and v by rows), PEFT LM keys
+(`language_model.model.layers.N.self_attn.q_proj`, ComfyUI's
+`text_encoders.` form too), LyCORIS LoKr (`lycoris_layers_N_mlp_up_proj.lokr_w1`
+with `lokr_w2`, or with `lokr_w2_a` and `lokr_w2_b`) and ComfyUI `.diff`
+weights. Per tensor `.alpha`, `__metadata__` alpha and `adapter_config.json`
+alpha are honoured in that order, and a diffusers checkpoint marked
+`swiglu_gate_first` has the halves of its `ff_in` rows swapped to the
+value-then-gate order of the GGUF. DoRA, LoHa and PiSSA delta files are
+refused by name: their update is not `B @ A`, and merging one as if it were
+renders plausible, wrong audio. `GET /props` lists the directory with the
+models each entry touches.
+
+## Short schedules
+
+`flow_shift` warps the DiT's noise levels, `t' = shift t / (1 + (shift - 1) t)`.
+Left at 0 it follows the step count: `(30 - 1) / (steps - 1)` below the 30
+reference steps, 1 (the native schedule) from 30 up. At 10 steps without it
+the stereo image collapses (left/right correlation -0.09 on a test song
+against +0.77 at 30 steps); with the automatic shift of 3.22 it is +0.79.
+
 ## Server options
 
 ```
@@ -114,6 +159,8 @@ Server:
   --port <N>             Listen port (default: 8086)
   --max-batch <N>        LM batch limit (default: 1)
   --max-seq <N>          LM KV cache size (default: model context)
+  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)
+  --adapters <dir>       Directory of LoRA / LoKr adapters requests may name
 
 Debug:
   --no-fa                Disable flash attention
@@ -141,7 +188,7 @@ track (MP3 or WAV, selected by `output_format` in the request).
 **GET /health** - Returns `{"status":"ok"}`.
 
 **GET /props** - Available models per component, server version, default
-request parameters.
+request parameters, and the adapters of `--adapters`.
 
 **GET /logs** - SSE stream of server stderr.
 

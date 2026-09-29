@@ -5,8 +5,11 @@
 // keep CPU as fallback. This avoids duplicating init logic across
 // qwen3.h, qwen3-lm.h, cond.h, dit.h, vae.h.
 
+#include "ggml-alloc.h"
 #include "ggml-backend.h"
 
+#include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -86,6 +89,61 @@ static void mm3_ggml_log(enum ggml_log_level level, const char * text, void * us
     fflush(stderr);
 }
 
+// A device that initialises can still fail its first kernel: a CUDA driver
+// older than the toolkit rejects the PTX, a broken Vulkan driver faults. Rows
+// gathered from an F16 table and a matrix product run the kernels every model
+// starts with, on the device, before the engine takes any work. A device that
+// fails stops the process here, so the launcher can move on to the next one.
+static void backend_self_test(ggml_backend_t backend) {
+    auto                    start  = std::chrono::steady_clock::now();
+    struct ggml_init_params params = { 16 * ggml_tensor_overhead() + ggml_graph_overhead(), NULL, true };
+    struct ggml_context *   ctx    = ggml_init(params);
+    struct ggml_tensor *    table  = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, 64, 16);
+    struct ggml_tensor *    rows   = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, 4);
+    struct ggml_tensor *    x      = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 64, 8);
+    struct ggml_tensor *    total =
+        ggml_add(ctx, ggml_sum(ctx, ggml_get_rows(ctx, table, rows)), ggml_sum(ctx, ggml_mul_mat(ctx, table, x)));
+    struct ggml_cgraph * graph = ggml_new_graph(ctx);
+    ggml_build_forward_expand(graph, total);
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (!buffer) {
+        fprintf(stderr, "[Load] FATAL: self-test on %s could not allocate\n", ggml_backend_name(backend));
+        exit(1);
+    }
+
+    // Every table value is 1/64, so each gathered row sums to 1 and each
+    // product element is 1: 4 + 16 * 8 = 132
+    float    one_64 = 1.0f / 64.0f;
+    uint16_t h      = ggml_fp32_to_fp16(one_64);
+    uint16_t table_data[64 * 16];
+    for (int i = 0; i < 64 * 16; i++) {
+        table_data[i] = h;
+    }
+    int32_t row_data[4] = { 0, 3, 7, 15 };
+    float   x_data[64 * 8];
+    for (int i = 0; i < 64 * 8; i++) {
+        x_data[i] = 1.0f;
+    }
+    ggml_backend_tensor_set(table, table_data, 0, sizeof(table_data));
+    ggml_backend_tensor_set(rows, row_data, 0, sizeof(row_data));
+    ggml_backend_tensor_set(x, x_data, 0, sizeof(x_data));
+
+    enum ggml_status status = ggml_backend_graph_compute(backend, graph);
+    float            result = 0.0f;
+    if (status == GGML_STATUS_SUCCESS) {
+        ggml_backend_tensor_get(total, &result, 0, sizeof(result));
+    }
+    ggml_backend_buffer_free(buffer);
+    ggml_free(ctx);
+    if (status != GGML_STATUS_SUCCESS || !std::isfinite(result) || std::fabs(result - 132.0f) > 0.5f) {
+        fprintf(stderr, "[Load] FATAL: self-test on %s failed (status %d, result %f, expected 132)\n",
+                ggml_backend_name(backend), (int) status, (double) result);
+        exit(1);
+    }
+    double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    fprintf(stderr, "[Load] Self-test on %s: ok (%.1f ms)\n", ggml_backend_name(backend), ms);
+}
+
 // Initialize backends: load all available (CUDA, Metal, Vulkan...),
 // pick the best one, keep CPU as fallback.
 // label: log prefix, e.g. "DiT", "VAE", "LM"
@@ -103,7 +161,36 @@ static BackendPair backend_init(const char * label) {
         return g_backend_cache;
     }
 
+    // A release ships one CUDA backend per toolkit, each in a folder of its
+    // own, and the launcher names the one this card and driver run in
+    // MM3_CUDA_BACKEND. Loaded before the rest, so its devices outrank
+    // Vulkan's as they do from the default place.
+    static bool  cuda_loaded  = false;
+    const char * cuda_backend = std::getenv("MM3_CUDA_BACKEND");
+    if (!cuda_loaded && cuda_backend && cuda_backend[0]) {
+        if (!ggml_backend_load(cuda_backend)) {
+            fprintf(stderr, "[Load] FATAL: MM3_CUDA_BACKEND=%s did not load\n", cuda_backend);
+            exit(1);
+        }
+        cuda_loaded = true;
+    }
     ggml_backend_load_all();
+    // An update over an older install can leave a ggml-cuda.dll beside the
+    // executable: the named backend stays, a second CUDA goes
+    if (cuda_loaded) {
+        bool first = true;
+        for (size_t i = 0; i < ggml_backend_reg_count();) {
+            ggml_backend_reg_t reg = ggml_backend_reg_get(i);
+            if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0 && !first) {
+                ggml_backend_unload(reg);
+                continue;
+            }
+            if (strcmp(ggml_backend_reg_name(reg), "CUDA") == 0) {
+                first = false;
+            }
+            i++;
+        }
+    }
     BackendPair bp = {};
 
     // GGML_BACKEND env var: force a specific device instead of auto-best.
@@ -140,6 +227,9 @@ static BackendPair backend_init(const char * label) {
         exit(1);
     }
     bp.has_gpu = !best_is_cpu;
+    if (bp.has_gpu) {
+        backend_self_test(bp.backend);
+    }
     fprintf(stderr, "[Load] %s backend: %s (CPU threads: %d)\n", label, ggml_backend_name(bp.backend), n_threads);
 
     g_backend_cache = bp;

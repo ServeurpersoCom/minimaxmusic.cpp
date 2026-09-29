@@ -33,6 +33,8 @@ void request_init(MM3Request * r) {
     r->peak_clip     = 10;
     r->output_format = OUTPUT_FORMAT_MP3;
     r->mp3_bitrate   = 128;
+    r->flow_shift    = 0.0f;
+    r->adapters.clear();
 
     r->lm_model    = "";
     r->depth_model = "";
@@ -47,7 +49,7 @@ static inline std::string yy_str(yyjson_val * v) {
 }
 
 // populate MM3Request fields from a yyjson object (must be pre-initialized)
-static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
+static bool request_parse_obj(yyjson_val * obj, MM3Request * r) {
     yyjson_val * v;
 
     if ((v = yyjson_obj_get(obj, "caption")) && yyjson_is_str(v)) {
@@ -112,6 +114,48 @@ static void request_parse_obj(yyjson_val * obj, MM3Request * r) {
     if ((v = yyjson_obj_get(obj, "mp3_bitrate")) && yyjson_is_int(v)) {
         r->mp3_bitrate = (int) yyjson_get_sint(v);
     }
+    if ((v = yyjson_obj_get(obj, "flow_shift")) && yyjson_is_num(v)) {
+        r->flow_shift = (float) yyjson_get_num(v);
+    }
+    if ((v = yyjson_obj_get(obj, "adapters")) && yyjson_is_arr(v)) {
+        r->adapters.clear();
+        size_t       idx, max;
+        yyjson_val * item;
+        yyjson_arr_foreach(v, idx, max, item) {
+            yyjson_val *      f;
+            MM3RequestAdapter a;
+            if (yyjson_is_str(item) && yyjson_get_len(item) > 0) {
+                a.name = yy_str(item);
+                r->adapters.push_back(a);
+                continue;
+            }
+            if (!yyjson_is_obj(item) || !(f = yyjson_obj_get(item, "name")) || !yyjson_is_str(f) ||
+                yyjson_get_len(f) == 0) {
+                fprintf(stderr, "[Request] ERROR: an adapter needs a name\n");
+                return false;
+            }
+            a.name = yy_str(f);
+            if ((f = yyjson_obj_get(item, "scale")) && yyjson_is_num(f)) {
+                a.scale = (float) yyjson_get_num(f);
+            }
+            if ((f = yyjson_obj_get(item, "lm_scale")) && yyjson_is_num(f)) {
+                a.lm_scale = (float) yyjson_get_num(f);
+            }
+            if ((f = yyjson_obj_get(item, "dit_scale")) && yyjson_is_num(f)) {
+                a.dit_scale = (float) yyjson_get_num(f);
+            }
+            r->adapters.push_back(a);
+        }
+    }
+    if ((v = yyjson_obj_get(obj, "adapter")) && yyjson_is_str(v) && yyjson_get_len(v) > 0) {
+        MM3RequestAdapter a;
+        a.name = yy_str(v);
+        if ((v = yyjson_obj_get(obj, "adapter_scale")) && yyjson_is_num(v)) {
+            a.scale = (float) yyjson_get_num(v);
+        }
+        r->adapters.push_back(a);
+    }
+    return true;
 }
 
 bool request_parse_json(MM3Request * r, const char * json) {
@@ -124,9 +168,9 @@ bool request_parse_json(MM3Request * r, const char * json) {
         yyjson_doc_free(doc);
         return false;
     }
-    request_parse_obj(root, r);
+    bool ok = request_parse_obj(root, r);
     yyjson_doc_free(doc);
-    return true;
+    return ok;
 }
 
 // read a whole file into a string, empty on failure
@@ -156,7 +200,7 @@ bool request_parse(MM3Request * r, const char * path) {
         return false;
     }
     if (!request_parse_json(r, json.c_str())) {
-        fprintf(stderr, "[Request] ERROR: malformed JSON in %s\n", path);
+        fprintf(stderr, "[Request] ERROR: %s is not a valid request\n", path);
         return false;
     }
     fprintf(stderr, "[Request] Parsed %s\n", path);
@@ -199,6 +243,7 @@ std::string request_to_json(const MM3Request * r, bool sparse) {
     put_i("synth_batch_size", r->synth_batch_size, def.synth_batch_size);
     put_str("audio_codes", r->audio_codes, def.audio_codes);
     put_f("dit_cfg", r->dit_cfg, def.dit_cfg);
+    put_f("flow_shift", r->flow_shift, def.flow_shift);
     put_i("peak_clip", r->peak_clip, def.peak_clip);
     put_str("output_format", r->output_format, def.output_format);
     put_i("mp3_bitrate", r->mp3_bitrate, def.mp3_bitrate);
@@ -207,6 +252,21 @@ std::string request_to_json(const MM3Request * r, bool sparse) {
     put_str("cond_model", r->cond_model, def.cond_model);
     put_str("dit_model", r->dit_model, def.dit_model);
     put_str("vae_model", r->vae_model, def.vae_model);
+    if (!sparse || !r->adapters.empty()) {
+        yyjson_mut_val * arr = yyjson_mut_arr(doc);
+        for (const auto & a : r->adapters) {
+            yyjson_mut_val * item = yyjson_mut_arr_add_obj(doc, arr);
+            yyjson_mut_obj_add_strncpy(doc, item, "name", a.name.c_str(), a.name.size());
+            yyjson_mut_obj_add_real(doc, item, "scale", a.scale);
+            if (!std::isnan(a.lm_scale)) {
+                yyjson_mut_obj_add_real(doc, item, "lm_scale", a.lm_scale);
+            }
+            if (!std::isnan(a.dit_scale)) {
+                yyjson_mut_obj_add_real(doc, item, "dit_scale", a.dit_scale);
+            }
+        }
+        yyjson_mut_obj_add_val(doc, root, "adapters", arr);
+    }
 
     char *      s   = yyjson_mut_write(doc, WRITE_FLAGS, NULL);
     std::string out = s ? s : "{}";

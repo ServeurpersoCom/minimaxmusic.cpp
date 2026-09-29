@@ -164,6 +164,9 @@ static bool qw3lm_json_bool(const char * json, const char * key, bool fb) {
 }
 
 // Load config from GGUF KV metadata (mm3.config_json)
+// The LM's context, and so its KV length unless --max-seq or a request asks for less
+static const int QW3LM_CONTEXT = 10240;
+
 static Qwen3LMConfig qw3lm_load_config(const GGUFModel & gf) {
     // MiniMax Music 3 global LM defaults (Qwen3 8B, language_model/config.json)
     Qwen3LMConfig c = {
@@ -177,7 +180,7 @@ static Qwen3LMConfig qw3lm_load_config(const GGUFModel & gf) {
         /*rope_theta*/ 1000000.0f,
         /*rms_norm_eps*/ 1e-6f,
         /*tie_embeddings*/ false,
-        /*max_seq_len*/ 10240,
+        /*max_seq_len*/ QW3LM_CONTEXT,
     };
 
     const char * j = gf_get_str(gf, "mm3.config_json");

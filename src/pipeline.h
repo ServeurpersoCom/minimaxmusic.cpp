@@ -29,12 +29,13 @@
 // configure and stay fixed for the process lifetime (graph caches and
 // store keys bake them in).
 struct MM3PipelineParams {
-    bool         use_fa        = true;     // flash attention on GPU backends
-    bool         use_batch_cfg = true;     // fuse the cond and uncond CFG streams in one LM decode
-    bool         clamp_fp16    = false;    // clamp hidden states to FP16 range
-    int          max_seq       = 0;        // LM KV cache size, 0 = model context
-    int          max_batch     = 1;        // song batch limit, sizes the 2N LM KV sets at load
-    const char * dump_dir      = nullptr;  // dump intermediate tensors
+    bool         use_fa         = true;     // flash attention on GPU backends
+    bool         use_batch_cfg  = true;     // fuse the cond and uncond CFG streams in one LM decode
+    bool         clamp_fp16     = false;    // clamp hidden states to FP16 range
+    int          max_seq        = 0;        // LM KV cache size, 0 = model context
+    bool         kv_per_request = false;    // size the LM KV to each request, for an LM loaded per request
+    int          max_batch      = 1;        // song batch limit, sizes the 2N LM KV sets at load
+    const char * dump_dir       = nullptr;  // dump intermediate tensors
 };
 
 // Resolved GGUF paths for the five modules

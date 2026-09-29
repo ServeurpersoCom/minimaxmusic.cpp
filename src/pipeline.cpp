@@ -194,8 +194,8 @@ static float pipeline_flow_shift(float requested, int steps) {
     return raw < 1.0f ? 1.0f : raw > 20.0f ? 20.0f : raw;
 }
 
-static Qwen3LM * require_lm(MM3Pipeline * p) {
-    ModelKey  k = { MODEL_LM, p->wanted.lm, p->params.max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch),
+static Qwen3LM * require_lm(MM3Pipeline * p, int max_seq) {
+    ModelKey  k = { MODEL_LM, p->wanted.lm, max_seq, 2 * (p->params.max_batch < 1 ? 1 : p->params.max_batch),
                     p->lm_adapters };
     Qwen3LM * m = store_require_lm(p->store, k);
     if (m) {
@@ -205,6 +205,22 @@ static Qwen3LM * require_lm(MM3Pipeline * p) {
         m->clamp_fp16 = p->params.clamp_fp16;
     }
     return m;
+}
+
+// The KV positions a request can reach: its prompt, its frame budget and the
+// end token, padded so that nearby lengths share a size. Only an LM loaded per
+// request is sized to it; a kept LM and a replay keep the configured length.
+static int lm_kv_length(MM3Pipeline * p, const MM3Request & req, BPETokenizer * tok) {
+    if (!p->params.kv_per_request || !req.audio_codes.empty()) {
+        return p->params.max_seq;
+    }
+    std::vector<int> prompt =
+        mm3_build_prompt_ids([&](const std::string & s) { return bpe_encode(tok, s, false); }, req.caption, req.lyrics);
+    int frames = (int) (req.duration * FRAME_RATE);
+    frames     = frames < 0 ? 0 : (frames > MAX_FRAMES ? MAX_FRAMES : frames);
+    int need   = (int) GGML_PAD((int) prompt.size() + frames + 2, 256);
+    int cap    = p->params.max_seq > 0 ? p->params.max_seq : QW3LM_CONTEXT;
+    return need < cap ? need : cap;
 }
 
 static DepthDecoder * require_depth(MM3Pipeline * p) {
@@ -659,7 +675,11 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
     // synthesis group is required, so under STRICT the LM weights and
     // the DiT weights never coexist
     {
-        Qwen3LM * lm = require_lm(p);
+        BPETokenizer * tok = store_bpe(p->store, p->wanted.lm.c_str());
+        if (!tok) {
+            return PIPELINE_FAILED;
+        }
+        Qwen3LM * lm = require_lm(p, lm_kv_length(p, req, tok));
         if (!lm) {
             return PIPELINE_FAILED;
         }
@@ -668,11 +688,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         if (!depth) {
             return PIPELINE_FAILED;
         }
-        ModelHandle    depth_h(p->store, depth);
-        BPETokenizer * tok = store_bpe(p->store, p->wanted.lm.c_str());
-        if (!tok) {
-            return PIPELINE_FAILED;
-        }
+        ModelHandle depth_h(p->store, depth);
         H = lm->cfg.hidden_size;
 
         if (!req.audio_codes.empty()) {
@@ -991,7 +1007,11 @@ PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
         return PIPELINE_FAILED;
     }
 
-    Qwen3LM * lm = require_lm(p);
+    BPETokenizer * tok = store_bpe(p->store, p->wanted.lm.c_str());
+    if (!tok) {
+        return PIPELINE_FAILED;
+    }
+    Qwen3LM * lm = require_lm(p, lm_kv_length(p, req, tok));
     if (!lm) {
         return PIPELINE_FAILED;
     }
@@ -1000,11 +1020,7 @@ PipelineStatus pipeline_lm_generate(MM3Pipeline *              p,
     if (!depth) {
         return PIPELINE_FAILED;
     }
-    ModelHandle    depth_h(p->store, depth);
-    BPETokenizer * tok = store_bpe(p->store, p->wanted.lm.c_str());
-    if (!tok) {
-        return PIPELINE_FAILED;
-    }
+    ModelHandle depth_h(p->store, depth);
 
     std::vector<std::vector<int>> codes(N);
     std::vector<int>              n_frames;

@@ -775,6 +775,8 @@ int main(int argc, char ** argv) {
     LogCapture log_capture;
 
     g_pipeline.store = store_create(g_keep_loaded ? EVICT_NEVER : EVICT_STRICT);
+    // STRICT reloads the LM for every request, so its KV can be as long as that request
+    g_params.kv_per_request = !g_keep_loaded;
 
     registry_scan(&g_registry, g_models_dir.c_str());
     if (!g_registry.lm.empty()) {

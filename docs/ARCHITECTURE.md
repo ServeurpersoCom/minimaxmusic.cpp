@@ -667,6 +667,11 @@ POST /synth                     Submit a generation job, returns job ID
   steps < 2, prompt over the 5000 token budget, invalid output_format,
   unknown model name
 
+POST /tokenize                  Prompt length of a request, as /synth checks it
+  body: application/json MM3Request (caption and lyrics are read)
+  response: {"tokens":N,"limit":5000}
+  503 when the models directory holds no LM GGUF to read the tokenizer from
+
 GET  /job?id=N                  Poll job status
   response: {"status":"queued|running|done|failed|cancelled"}
 

@@ -507,6 +507,26 @@ static void json_error(httplib::Response & res, int code, const char * msg) {
     res.set_content(body, "application/json");
 }
 
+// POST /tokenize: the prompt length /synth checks against its budget, for the
+// caption and lyrics of a request, counted exactly as the LM receives them
+static void handle_tokenize(const httplib::Request & req, httplib::Response & res) {
+    MM3Request r;
+    request_init(&r);
+    if (!request_parse_json(&r, req.body.c_str())) {
+        json_error(res, 400, "Malformed JSON");
+        return;
+    }
+    if (!g_tok_ready) {
+        json_error(res, 503, "No tokenizer: the models directory holds no LM GGUF");
+        return;
+    }
+    std::vector<int> ids = mm3_build_prompt_ids([](const std::string & s) { return bpe_encode(&g_tok, s, false); },
+                                                r.caption, r.lyrics);
+    char body[96];
+    snprintf(body, sizeof(body), "{\"tokens\":%zu,\"limit\":%d}", ids.size(), MAX_PROMPT_TOKENS);
+    res.set_content(body, "application/json");
+}
+
 // POST /synth: validate, create job, queue the full pipeline run
 static void handle_synth(const httplib::Request & req, httplib::Response & res) {
     MM3Request r;
@@ -805,6 +825,7 @@ int main(int argc, char ** argv) {
     svr.Get("/health", [](const httplib::Request &, httplib::Response & res) {
         res.set_content("{\"status\":\"ok\"}", "application/json");
     });
+    svr.Post("/tokenize", handle_tokenize);
     svr.Get("/props", handle_props);
     svr.Get("/logs", handle_logs);
 

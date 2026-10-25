@@ -37,7 +37,7 @@
 		const a = document.createElement('a');
 		a.href = url;
 		const safe = song.name.replace(/[\\/:*?"<>|\x00-\x1f]/g, '') || 'song';
-		const ext = song.format === 'mp3' ? 'mp3' : 'wav';
+		const ext = song.format.startsWith('wav') ? 'wav' : song.format.startsWith('flac') ? 'flac' : 'mp3';
 		a.download = `${safe}.${ext}`;
 		a.click();
 		URL.revokeObjectURL(url);

@@ -67,9 +67,11 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -1025,6 +1027,26 @@ static bool adapter_backend_can_decode(ggml_backend_t backend, enum ggml_type ty
     return ok;
 }
 
+// Runs fn(r0, r1) over [0, nrows) in contiguous row ranges on all cores: rows
+// are independent, and the host decode and requant are the slow part of a merge
+static void adapter_for_row_ranges(int64_t nrows, const std::function<void(int64_t, int64_t)> & fn) {
+    int64_t threads = (int64_t) std::thread::hardware_concurrency();
+    threads         = (std::max<int64_t>)(1, (std::min<int64_t>)(threads, nrows));
+    if (threads == 1) {
+        fn(0, nrows);
+        return;
+    }
+    std::vector<std::thread> pool;
+    int64_t                  step = (nrows + threads - 1) / threads;
+    for (int64_t r0 = 0; r0 < nrows; r0 += step) {
+        int64_t r1 = (std::min)(nrows, r0 + step);
+        pool.emplace_back([&fn, r0, r1] { fn(r0, r1); });
+    }
+    for (auto & t : pool) {
+        t.join();
+    }
+}
+
 // F32 back to the tensor type on the host, for the types the backend cannot encode
 static size_t adapter_requant(const float * src, void * dst, int64_t nel, int64_t n_per_row, enum ggml_type type) {
     if (type == GGML_TYPE_F32) {
@@ -1034,7 +1056,10 @@ static size_t adapter_requant(const float * src, void * dst, int64_t nel, int64_
     const struct ggml_type_traits * traits = ggml_get_type_traits(type);
     if (traits->is_quantized) {
         int64_t nrows = nel / n_per_row;
-        ggml_quantize_chunk(type, src, dst, 0, nrows, n_per_row, NULL);
+        ggml_quantize_init(type);
+        adapter_for_row_ranges(nrows, [&](int64_t r0, int64_t r1) {
+            ggml_quantize_chunk(type, src, dst, r0 * n_per_row, r1 - r0, n_per_row, NULL);
+        });
         return ggml_row_size(type, n_per_row) * (size_t) nrows;
     }
     if (traits->from_float_ref) {
@@ -1083,7 +1108,10 @@ static bool adapter_merge_tensor(WeightCtx *                      wctx,
         tbf   = ttype == GGML_TYPE_F32 ? tbase : ggml_cast(ctx, tbase, GGML_TYPE_F32);
     } else {
         host_base.resize((size_t) (ne0 * ne1));
-        traits->to_float(pc->src, host_base.data(), ne0 * ne1);
+        size_t row_nb = ggml_row_size(ttype, ne0);
+        adapter_for_row_ranges(ne1, [&](int64_t r0, int64_t r1) {
+            traits->to_float((const char *) pc->src + r0 * row_nb, host_base.data() + r0 * ne0, (r1 - r0) * ne0);
+        });
         tbf = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, ne0, ne1);
         uploads.push_back({ tbf, &host_base });
     }

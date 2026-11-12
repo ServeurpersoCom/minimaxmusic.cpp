@@ -685,7 +685,9 @@ GET  /job?id=N                  Poll job status
 GET  /job?id=N&result=1         Fetch job result
   multipart/mixed, boundary mm3-batch-boundary: one application/json
   replay request part (the request with audio_codes and the exact seed
-  of the track) then one audio/mpeg or audio/wav part per track
+  of the track, plus "truncated": true when the KV cache shortened the
+  frame budget and the song stopped there before its end of audio
+  token) then one audio/mpeg or audio/wav part per track
   (output_format of the request), song-major order
   404 while the result is not ready
 

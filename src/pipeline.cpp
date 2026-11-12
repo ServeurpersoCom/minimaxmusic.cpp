@@ -384,6 +384,8 @@ static PipelineStatus replay_stage(MM3Pipeline *        p,
 
 // Autoregressive stage: N songs sampled in one batched pass. Records
 // every song's code stream; hiddens_out is optional (null for mm-lm).
+// truncated_out (optional): per song, true when it stopped at a frame
+// budget the KV cache had shortened, before its end of audio token.
 static PipelineStatus ar_stage(MM3Pipeline *                     p,
                                Qwen3LM *                         lm,
                                DepthDecoder *                    depth,
@@ -393,7 +395,8 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
                                int                               N,
                                std::vector<std::vector<float>> * hiddens_out,
                                std::vector<std::vector<int>> &   codes_out,
-                               std::vector<int> &                n_frames) {
+                               std::vector<int> &                n_frames,
+                               std::vector<bool> *               truncated_out = nullptr) {
     // Prompt pair, shared by every song in the batch
     std::vector<int> cond_ids =
         mm3_build_prompt_ids([&](const std::string & s) { return bpe_encode(tok, s, false); }, req.caption, req.lyrics);
@@ -453,8 +456,9 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     if (max_frames > MAX_FRAMES) {
         max_frames = MAX_FRAMES;
     }
-    int kv_budget = lm->cfg.max_seq_len - (int) cond_ids.size() - 1;
-    if (max_frames > kv_budget) {
+    int  kv_budget  = lm->cfg.max_seq_len - (int) cond_ids.size() - 1;
+    bool kv_clamped = max_frames > kv_budget;
+    if (kv_clamped) {
         fprintf(stderr, "[AR] Frame budget clamped to %d by the KV cache (prompt %zu tokens)\n", kv_budget,
                 cond_ids.size());
         max_frames = kv_budget;
@@ -474,6 +478,9 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     // shapes, hot CUDA graphs); only its accumulation stops.
     std::vector<int>  frames(N, 0);
     std::vector<bool> done(N, false);
+    if (truncated_out) {
+        truncated_out->assign(N, false);
+    }
     std::vector<int>  sampled(N);
     std::vector<int>  kv_sets(2 * N);
     for (int s = 0; s < 2 * N; s++) {
@@ -584,6 +591,12 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
                 frames[i]++;
                 if (frames[i] >= max_frames) {
                     done[i] = true;
+                    if (kv_clamped) {
+                        fprintf(stderr, "[AR] Song %d: cut short by the KV cache at frame %d\n", i, frames[i]);
+                        if (truncated_out) {
+                            (*truncated_out)[i] = true;
+                        }
+                    }
                 }
             }
             bool budget_done = true;
@@ -658,7 +671,8 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  const MM3Request &                req,
                                  std::atomic<bool> *               cancel,
                                  std::vector<std::vector<float>> & tracks_out,
-                                 std::vector<std::string> *        codes_out) {
+                                 std::vector<std::string> *        codes_out,
+                                 std::vector<bool> *               truncated_out) {
     Timer total_timer;
 
     std::string adapter_error;
@@ -716,10 +730,14 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
             if (codes_out) {
                 codes_out->assign(1, req.audio_codes);
             }
+            if (truncated_out) {
+                truncated_out->assign(1, false);
+            }
         } else {
             frame_hiddens.resize(N);
             std::vector<std::vector<int>> codes(N);
-            PipelineStatus st = ar_stage(p, lm, depth, tok, req, cancel, N, &frame_hiddens, codes, n_frames);
+            PipelineStatus st =
+                ar_stage(p, lm, depth, tok, req, cancel, N, &frame_hiddens, codes, n_frames, truncated_out);
             if (st != PIPELINE_OK) {
                 return st;
             }

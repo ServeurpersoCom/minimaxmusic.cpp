@@ -263,6 +263,26 @@ static std::string multipart_build_tracks(const std::vector<std::string> & reque
 
 static const std::string MULTIPART_MIME = std::string("multipart/mixed; boundary=") + MULTIPART_BOUNDARY;
 
+// The JSON part of a track: its replay request, and "truncated" when the KV
+// cache cut the song short. A resubmit ignores the extra key.
+static std::string track_json(const MM3Request & replay, bool truncated) {
+    std::string json = request_to_json(&replay, true);
+    if (!truncated) {
+        return json;
+    }
+    yyjson_doc *     read = yyjson_read(json.c_str(), json.size(), 0);
+    yyjson_mut_doc * doc  = yyjson_doc_mut_copy(read, NULL);
+    yyjson_doc_free(read);
+    yyjson_mut_obj_add_bool(doc, yyjson_mut_doc_get_root(doc), "truncated", true);
+    char *      text = yyjson_mut_write(doc, 0, NULL);
+    std::string out  = text ? text : json;
+    if (text) {
+        free(text);
+    }
+    yyjson_mut_doc_free(doc);
+    return out;
+}
+
 // job system: the compute endpoint creates a job and returns its ID
 // immediately. the worker thread processes jobs in FIFO order, stores
 // the result. the client polls GET /job?id=N until done, then fetches
@@ -619,7 +639,9 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
 
         std::vector<std::vector<float>> tracks;
         std::vector<std::string>        codes;
-        PipelineStatus                  status = pipeline_generate(&g_pipeline, r, &job->cancel, tracks, &codes);
+        std::vector<bool>               truncated;
+        PipelineStatus                  status =
+            pipeline_generate(&g_pipeline, r, &job->cancel, tracks, &codes, &truncated);
         if (status == PIPELINE_CANCELLED) {
             job->status.store(JobStatus::CANCELLED);
             return;
@@ -652,7 +674,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         std::vector<std::string> requests(parts.size());
         for (size_t i = 0; i < parts.size(); i++) {
             MM3Request replay = request_replay(r, codes[i / M], (int) (i / M), (int) (i % M));
-            requests[i]       = request_to_json(&replay, true);
+            requests[i]       = track_json(replay, truncated[i / M]);
         }
         job->result_body = multipart_build_tracks(requests, parts, mime);
         job->result_mime = MULTIPART_MIME;

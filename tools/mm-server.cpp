@@ -48,6 +48,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -685,6 +686,23 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
     res.set_content(body, "application/json");
 }
 
+// POST /evict: unloads every model no job holds. It runs in the work queue, so
+// it never meets a job half way; the next request loads what it needs again.
+static void handle_evict(const httplib::Request &, httplib::Response & res) {
+    auto                                done   = std::make_shared<std::promise<std::pair<size_t, int>>>();
+    std::future<std::pair<size_t, int>> result = done->get_future();
+    work_push([done] {
+        size_t freed = store_evict_idle(g_pipeline.store);
+        done->set_value({ freed, store_gpu_module_count(g_pipeline.store) });
+    });
+    std::pair<size_t, int> evicted  = result.get();
+    double                 freed_mb = (double) evicted.first / (1024.0 * 1024.0);
+    fprintf(stderr, "[Server] Evict: %.1f MB freed, %d modules left\n", freed_mb, evicted.second);
+    char body[96];
+    snprintf(body, sizeof(body), "{\"freed_mb\":%.1f,\"modules\":%d}", freed_mb, evicted.second);
+    res.set_content(body, "application/json");
+}
+
 // GET /props: version, model buckets, request defaults
 static void handle_props(const httplib::Request &, httplib::Response & res) {
     yyjson_mut_doc * doc  = yyjson_mut_doc_new(NULL);
@@ -762,7 +780,7 @@ static void print_usage(const char * argv0) {
             "  --port <N>             Listen port (default: 8086)\n"
             "  --max-batch <N>        LM batch limit (default: 1)\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
-            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)\n"
+            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages; POST /evict unloads them)\n"
             "  --adapters <dir>       Directory of LoRA / LoKr adapters requests may name\n"
             "\n"
             "Debug:\n"
@@ -860,6 +878,7 @@ int main(int argc, char ** argv) {
         res.set_content("{\"status\":\"ok\"}", "application/json");
     });
     svr.Post("/tokenize", handle_tokenize);
+    svr.Post("/evict", handle_evict);
     svr.Get("/props", handle_props);
     svr.Get("/logs", handle_logs);
 

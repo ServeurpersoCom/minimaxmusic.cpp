@@ -112,6 +112,12 @@ void store_release(ModelStore * s, void * handle);
 // Returns NULL on load failure.
 BPETokenizer * store_bpe(ModelStore * s, const char * lm_path);
 
+// Unloads every GPU module no pipeline holds (refcount 0), whatever the
+// policy: a store kept loaded gives its memory back on request. Not locked:
+// the server calls it from its one work thread, between jobs. Returns the
+// bytes freed.
+size_t store_evict_idle(ModelStore * s);
+
 // Observability: sum of currently resident GPU module weight buffers, and
 // the count of loaded GPU modules. Used by test-model-store to assert
 // eviction policy invariants.

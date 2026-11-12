@@ -393,6 +393,26 @@ BPETokenizer * store_bpe(ModelStore * s, const char * lm_path) {
     return bpe;
 }
 
+size_t store_evict_idle(ModelStore * s) {
+    if (!s) {
+        return 0;
+    }
+    size_t freed = 0;
+    for (auto it = s->gpu.begin(); it != s->gpu.end();) {
+        GpuEntry & e = it->second;
+        if (e.refcount > 0) {
+            ++it;
+            continue;
+        }
+        fprintf(stderr, "[Store] Evict %s (%.1f MB)\n", e.label, (float) e.bytes / (1024.0f * 1024.0f));
+        freed += e.bytes;
+        s->handle_to_key.erase(e.ptr);
+        e.deleter(e.ptr);
+        it = s->gpu.erase(it);
+    }
+    return freed;
+}
+
 size_t store_vram_bytes(const ModelStore * s) {
     if (!s) {
         return 0;

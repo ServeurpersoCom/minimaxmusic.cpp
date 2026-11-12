@@ -88,6 +88,12 @@ static std::string registry_classify_gguf(const char * path) {
     if (idx >= 0) {
         arch = gguf_get_val_str(ctx, idx);
     }
+    // the HOT-Step converter writes the LM as a plain qwen3 and says whose it is
+    int64_t model = gguf_find_key(ctx, "mm3.model");
+    if (arch == "qwen3" && model >= 0 && gguf_get_kv_type(ctx, model) == GGUF_TYPE_STRING &&
+        strcmp(gguf_get_val_str(ctx, model), "MiniMax-Music3") == 0) {
+        arch = "mm3-lm";
+    }
     gguf_free(ctx);
     if (arch == "mm3-lm" || arch == "mm3-depth" || arch == "mm3-cond" || arch == "mm3-dit" || arch == "mm3-vae") {
         return arch;

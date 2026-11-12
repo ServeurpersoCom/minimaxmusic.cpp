@@ -56,11 +56,26 @@ endif()
 if(NOT DEFINED GGML_CUDA_GRAPHS)
     set(GGML_CUDA_GRAPHS_DEFAULT ON)
 endif()
+# tinyBLAS (llamafile sgemm) default on: standalone ggml ships it off, llama.cpp ships it on. It is the CPU matrix
+# kernel for F32, F16, BF16, Q8_0 and Q4_0 weights. Overridable with -DGGML_LLAMAFILE=OFF.
+if(NOT DEFINED GGML_LLAMAFILE)
+    set(GGML_LLAMAFILE_DEFAULT ON)
+endif()
 set(GGML_SOURCE_DIR "${CMAKE_SOURCE_DIR}/ggml" CACHE PATH "ggml source tree")
 add_subdirectory(${GGML_SOURCE_DIR} ggml)
 
 # cpp-httplib (HTTP server library, used by mm-server)
 add_subdirectory(vendor/cpp-httplib)
+
+# Windows: the process code page is UTF-8, so paths and arguments outside the
+# system's ANSI code page reach the narrow file APIs (fopen, CreateFileA,
+# FindFirstFileA) intact instead of as '?'.
+macro(utf8_code_page target)
+    get_target_property(UTF8_TARGET_TYPE ${target} TYPE)
+    if(MSVC AND UTF8_TARGET_TYPE STREQUAL "EXECUTABLE")
+        target_sources(${target} PRIVATE ${CMAKE_SOURCE_DIR}/tools/utf8.manifest)
+    endif()
+endmacro()
 
 # Shared compile options and ggml linkage
 macro(link_ggml_backends target)
@@ -99,6 +114,7 @@ macro(link_ggml_backends target)
         target_link_options(${target} PRIVATE -fsycl)
     endif()
     add_dependencies(${target} version)
+    utf8_code_page(${target})
 endmacro()
 
 # yyjson (MIT, fast JSON parser/writer)
@@ -152,6 +168,7 @@ target_include_directories(mp3-codec PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}
 )
 add_dependencies(mp3-codec version)
+utf8_code_page(mp3-codec)
 if(MSVC)
     target_compile_options(mp3-codec PRIVATE /W4 /wd4100 /wd4505)
 else()

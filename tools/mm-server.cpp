@@ -48,6 +48,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -262,6 +263,26 @@ static std::string multipart_build_tracks(const std::vector<std::string> & reque
 }
 
 static const std::string MULTIPART_MIME = std::string("multipart/mixed; boundary=") + MULTIPART_BOUNDARY;
+
+// The JSON part of a track: its replay request, and "truncated" when the KV
+// cache cut the song short. A resubmit ignores the extra key.
+static std::string track_json(const MM3Request & replay, bool truncated) {
+    std::string json = request_to_json(&replay, true);
+    if (!truncated) {
+        return json;
+    }
+    yyjson_doc *     read = yyjson_read(json.c_str(), json.size(), 0);
+    yyjson_mut_doc * doc  = yyjson_doc_mut_copy(read, NULL);
+    yyjson_doc_free(read);
+    yyjson_mut_obj_add_bool(doc, yyjson_mut_doc_get_root(doc), "truncated", true);
+    char *      text = yyjson_mut_write(doc, 0, NULL);
+    std::string out  = text ? text : json;
+    if (text) {
+        free(text);
+    }
+    yyjson_mut_doc_free(doc);
+    return out;
+}
 
 // job system: the compute endpoint creates a job and returns its ID
 // immediately. the worker thread processes jobs in FIFO order, stores
@@ -508,6 +529,26 @@ static void json_error(httplib::Response & res, int code, const char * msg) {
     res.set_content(body, "application/json");
 }
 
+// POST /tokenize: the prompt length /synth checks against its budget, for the
+// caption and lyrics of a request, counted exactly as the LM receives them
+static void handle_tokenize(const httplib::Request & req, httplib::Response & res) {
+    MM3Request r;
+    request_init(&r);
+    if (!request_parse_json(&r, req.body.c_str())) {
+        json_error(res, 400, "Malformed JSON");
+        return;
+    }
+    if (!g_tok_ready) {
+        json_error(res, 503, "No tokenizer: the models directory holds no LM GGUF");
+        return;
+    }
+    std::vector<int> ids = mm3_build_prompt_ids([](const std::string & s) { return bpe_encode(&g_tok, s, false); },
+                                                r.caption, r.lyrics);
+    char body[96];
+    snprintf(body, sizeof(body), "{\"tokens\":%zu,\"limit\":%d}", ids.size(), MAX_PROMPT_TOKENS);
+    res.set_content(body, "application/json");
+}
+
 // POST /synth: validate, create job, queue the full pipeline run
 static void handle_synth(const httplib::Request & req, httplib::Response & res) {
     MM3Request r;
@@ -579,6 +620,15 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         json_error(res, 400, "Unknown model name or empty model bucket");
         return;
     }
+    {
+        // adapters_dir is fixed at startup, so this is safe off the worker
+        std::vector<AdapterSpec> lm, dit;
+        std::string              adapter_error;
+        if (!pipeline_resolve_adapters(&g_pipeline, r, &lm, &dit, &adapter_error)) {
+            json_error(res, 400, adapter_error.c_str());
+            return;
+        }
+    }
 
     auto job = job_create();
     work_push([job, r, output_wav, wav_fmt]() {
@@ -590,7 +640,9 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
 
         std::vector<std::vector<float>> tracks;
         std::vector<std::string>        codes;
-        PipelineStatus                  status = pipeline_generate(&g_pipeline, r, &job->cancel, tracks, &codes);
+        std::vector<bool>               truncated;
+        PipelineStatus                  status =
+            pipeline_generate(&g_pipeline, r, &job->cancel, tracks, &codes, &truncated);
         if (status == PIPELINE_CANCELLED) {
             job->status.store(JobStatus::CANCELLED);
             return;
@@ -623,7 +675,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         std::vector<std::string> requests(parts.size());
         for (size_t i = 0; i < parts.size(); i++) {
             MM3Request replay = request_replay(r, codes[i / M], (int) (i / M), (int) (i % M));
-            requests[i]       = request_to_json(&replay, true);
+            requests[i]       = track_json(replay, i / M < truncated.size() && truncated[i / M]);
         }
         job->result_body = multipart_build_tracks(requests, parts, mime);
         job->result_mime = MULTIPART_MIME;
@@ -631,6 +683,23 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
     });
 
     std::string body = "{\"id\":\"" + job->id + "\"}";
+    res.set_content(body, "application/json");
+}
+
+// POST /evict: unloads every model no job holds. It runs in the work queue, so
+// it never meets a job half way; the next request loads what it needs again.
+static void handle_evict(const httplib::Request &, httplib::Response & res) {
+    auto                                done   = std::make_shared<std::promise<std::pair<size_t, int>>>();
+    std::future<std::pair<size_t, int>> result = done->get_future();
+    work_push([done] {
+        size_t freed = store_evict_idle(g_pipeline.store);
+        done->set_value({ freed, store_gpu_module_count(g_pipeline.store) });
+    });
+    std::pair<size_t, int> evicted  = result.get();
+    double                 freed_mb = (double) evicted.first / (1024.0 * 1024.0);
+    fprintf(stderr, "[Server] Evict: %.1f MB freed, %d modules left\n", freed_mb, evicted.second);
+    char body[96];
+    snprintf(body, sizeof(body), "{\"freed_mb\":%.1f,\"modules\":%d}", freed_mb, evicted.second);
     res.set_content(body, "application/json");
 }
 
@@ -657,6 +726,24 @@ static void handle_props(const httplib::Request &, httplib::Response & res) {
     add_names(models, "cond", g_registry.cond);
     add_names(models, "dit", g_registry.dit);
     add_names(models, "vae", g_registry.vae);
+
+    // adapters: what the adapter directory holds, rescanned per call so a
+    // file dropped in is usable without a restart
+    yyjson_mut_val * adapters = yyjson_mut_arr(doc);
+    for (const auto & e : adapter_scan(g_pipeline.adapters_dir)) {
+        yyjson_mut_val * item = yyjson_mut_arr_add_obj(doc, adapters);
+        yyjson_mut_obj_add_strncpy(doc, item, "name", e.name.c_str(), e.name.size());
+        yyjson_mut_obj_add_bool(doc, item, "ok", e.info.ok);
+        yyjson_mut_obj_add_bool(doc, item, "lm", e.info.lm_keys > 0);
+        yyjson_mut_obj_add_bool(doc, item, "dit", e.info.dit_keys > 0);
+        if (!e.info.trigger.empty()) {
+            yyjson_mut_obj_add_strncpy(doc, item, "trigger", e.info.trigger.c_str(), e.info.trigger.size());
+        }
+        if (!e.info.error.empty()) {
+            yyjson_mut_obj_add_strncpy(doc, item, "error", e.info.error.c_str(), e.info.error.size());
+        }
+    }
+    yyjson_mut_obj_add_val(doc, root, "adapters", adapters);
 
     // defaults: the full request schema with default values
     MM3Request def;
@@ -693,7 +780,8 @@ static void print_usage(const char * argv0) {
             "  --port <N>             Listen port (default: 8086)\n"
             "  --max-batch <N>        LM batch limit (default: 1)\n"
             "  --max-seq <N>          LM KV cache size (default: model context)\n"
-            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages)\n"
+            "  --keep-loaded          Keep every model resident in VRAM (default: evict between stages; POST /evict unloads them)\n"
+            "  --adapters <dir>       Directory of LoRA / LoKr adapters requests may name\n"
             "\n"
             "Debug:\n"
             "  --no-fa                Disable flash attention\n"
@@ -731,6 +819,8 @@ int main(int argc, char ** argv) {
             g_params.max_seq = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--keep-loaded") == 0) {
             g_keep_loaded = true;
+        } else if (strcmp(argv[i], "--adapters") == 0 && i + 1 < argc) {
+            g_pipeline.adapters_dir = argv[++i];
         } else if (strcmp(argv[i], "--no-fa") == 0) {
             g_params.use_fa = false;
         } else if (strcmp(argv[i], "--no-batch-cfg") == 0) {
@@ -757,6 +847,8 @@ int main(int argc, char ** argv) {
     LogCapture log_capture;
 
     g_pipeline.store = store_create(g_keep_loaded ? EVICT_NEVER : EVICT_STRICT);
+    // STRICT reloads the LM for every request, so its KV can be as long as that request
+    g_params.kv_per_request = !g_keep_loaded;
 
     registry_scan(&g_registry, g_models_dir.c_str());
     if (!g_registry.lm.empty()) {
@@ -785,6 +877,8 @@ int main(int argc, char ** argv) {
     svr.Get("/health", [](const httplib::Request &, httplib::Response & res) {
         res.set_content("{\"status\":\"ok\"}", "application/json");
     });
+    svr.Post("/tokenize", handle_tokenize);
+    svr.Post("/evict", handle_evict);
     svr.Get("/props", handle_props);
     svr.Get("/logs", handle_logs);
 
@@ -860,6 +954,12 @@ int main(int argc, char ** argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
+    // The device is chosen and tested before the server listens: a device
+    // that cannot run the engine fails the start, where the launcher can move
+    // on to the next one, instead of the first song. Held for the process
+    // lifetime, so every module shares it.
+    BackendPair held = backend_init("Device");
+
     // start FIFO worker thread (processes all GPU jobs in order)
     std::thread worker(worker_main);
 
@@ -884,6 +984,7 @@ int main(int argc, char ** argv) {
     active_job_cancel();
     cv_work.notify_one();
     worker.join();
+    backend_release(held.backend, held.cpu_backend);
 
     store_free(g_pipeline.store);
     fprintf(stderr, "[Server] Done\n");

@@ -59,6 +59,7 @@
 
 #include <cstddef>
 #include <string>
+#include <vector>
 
 struct ModelStore;
 
@@ -71,11 +72,13 @@ enum ModelKind {
 };
 
 struct ModelKey {
-    ModelKind   kind;
-    std::string path;  // GGUF path the module is loaded from
+    ModelKind                kind;
+    std::string              path;  // GGUF path the module is loaded from
     // LM-only extras (ignored for other kinds):
-    int         max_seq;    // KV cache length, 0 = model context
-    int         n_kv_sets;  // number of KV sets (2 * max_batch with CFG)
+    int                      max_seq;    // KV cache length, 0 = model context
+    int                      n_kv_sets;  // number of KV sets (2 * max_batch with CFG)
+    // LM and DiT: the adapters merged into that module
+    std::vector<AdapterSpec> adapters;
 };
 
 enum EvictPolicy {
@@ -108,6 +111,12 @@ void store_release(ModelStore * s, void * handle);
 // evicted: the tokenizer travels with the LM GGUF metadata (a few MB).
 // Returns NULL on load failure.
 BPETokenizer * store_bpe(ModelStore * s, const char * lm_path);
+
+// Unloads every GPU module no pipeline holds (refcount 0), whatever the
+// policy: a store kept loaded gives its memory back on request. Not locked:
+// the server calls it from its one work thread, between jobs. Returns the
+// bytes freed.
+size_t store_evict_idle(ModelStore * s);
 
 // Observability: sum of currently resident GPU module weight buffers, and
 // the count of loaded GPU modules. Used by test-model-store to assert

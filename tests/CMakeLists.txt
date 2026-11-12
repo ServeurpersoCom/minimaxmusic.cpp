@@ -16,6 +16,7 @@ link_ggml_backends(test-cond)
 # test-dit: flow matching DiT parity harness against the torch reference.
 add_executable(test-dit test-dit.cpp)
 link_ggml_backends(test-dit)
+target_link_libraries(test-dit PRIVATE yyjson)
 
 # test-depth: RVQ depth decoder parity harness against the torch reference.
 add_executable(test-depth test-depth.cpp)
@@ -24,7 +25,9 @@ link_ggml_backends(test-depth)
 # test-lm: global LM parity harness against the transformers reference.
 add_executable(test-lm test-lm.cpp)
 link_ggml_backends(test-lm)
+target_link_libraries(test-lm PRIVATE yyjson)
 
 # test-model-store: eviction policy and refcount invariants of the store.
 add_executable(test-model-store test-model-store.cpp ${CMAKE_SOURCE_DIR}/src/model-store.cpp)
 link_ggml_backends(test-model-store)
+target_link_libraries(test-model-store PRIVATE yyjson)

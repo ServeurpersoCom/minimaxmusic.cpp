@@ -5,8 +5,20 @@
 // Only fields the pipeline consumes: the recipe constants (window sizes,
 // crops, sigma schedule shape) live in the pipeline, not here.
 
+#include <cmath>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+// One adapter of a request, named as it sits in the server adapter directory.
+// scale applies to the LM and the DiT, lm_scale and dit_scale override it for
+// one of them when set, and a zero leaves that one untouched.
+struct MM3RequestAdapter {
+    std::string name;
+    float       scale     = 1.0f;
+    float       lm_scale  = NAN;
+    float       dit_scale = NAN;
+};
 
 struct MM3Request {
     // text content
@@ -43,6 +55,12 @@ struct MM3Request {
     int   lm_top_k;  // 50, applied to the conditional branch ranking
     float dit_cfg;   // 1.7, CFG scale on the DiT velocity field
 
+    // flow shift of the DiT sigma schedule, t' = shift t / (1 + (shift - 1) t)
+    // on the noise level t. 0 = automatic: (30 - 1) / (steps - 1) below the
+    // 30 reference steps, so a short schedule spends its steps where 30 would
+    // have, and 1 (the native schedule) at 30 and above.
+    float flow_shift;  // 0
+
     // audio output: peak clip via percentile normalization.
     // 0 = peak normalization (100.0000th percentile, no clipping).
     // Target percentile is 1.0 - peak_clip/1000000.0. WAV32 skips it.
@@ -63,6 +81,10 @@ struct MM3Request {
     std::string cond_model;
     std::string dit_model;
     std::string vae_model;
+
+    // adapters merged into the LM and the DiT for this request, in order.
+    // "adapter" and "adapter_scale" are read too, as a one entry list.
+    std::vector<MM3RequestAdapter> adapters;  // []
 };
 
 // Initialize all fields to defaults (matches the diffusers pipeline defaults)

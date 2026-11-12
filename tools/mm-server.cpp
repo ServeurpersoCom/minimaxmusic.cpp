@@ -674,7 +674,7 @@ static void handle_synth(const httplib::Request & req, httplib::Response & res) 
         std::vector<std::string> requests(parts.size());
         for (size_t i = 0; i < parts.size(); i++) {
             MM3Request replay = request_replay(r, codes[i / M], (int) (i / M), (int) (i % M));
-            requests[i]       = track_json(replay, truncated[i / M]);
+            requests[i]       = track_json(replay, i / M < truncated.size() && truncated[i / M]);
         }
         job->result_body = multipart_build_tracks(requests, parts, mime);
         job->result_mime = MULTIPART_MIME;

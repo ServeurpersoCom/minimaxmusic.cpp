@@ -686,6 +686,9 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
         fprintf(stderr, "[Pipeline] FATAL: lm_batch_size %d exceeds the batch limit %d\n", N, p->params.max_batch);
         return PIPELINE_FAILED;
     }
+    if (truncated_out) {
+        truncated_out->assign(N, false);
+    }
 
     std::vector<std::vector<float>> frame_hiddens;
     std::vector<int>                n_frames;
@@ -731,7 +734,7 @@ PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                 codes_out->assign(1, req.audio_codes);
             }
             if (truncated_out) {
-                truncated_out->assign(1, false);
+                truncated_out->assign(N, false);
             }
         } else {
             frame_hiddens.resize(N);

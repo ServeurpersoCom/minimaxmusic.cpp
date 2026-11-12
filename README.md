@@ -139,8 +139,9 @@ server caps urlencoded bodies at 8 KB).
 
 **GET /job?id=N** - Poll job status. **GET /job?id=N&result=1** fetches the
 result as multipart/mixed: one JSON replay request part (the request with
-`audio_codes` and the exact seed of the track) then one audio part per
-track (MP3 or WAV, selected by `output_format` in the request).
+`audio_codes` and the exact seed of the track, plus `"truncated": true` when
+the KV cache cut the song short) then one audio part per track (MP3 or WAV,
+selected by `output_format` in the request).
 **POST /job?id=N&cancel=1** cancels a running job.
 
 **GET /health** - Returns `{"status":"ok"}`.

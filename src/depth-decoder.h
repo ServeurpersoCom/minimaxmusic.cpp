@@ -196,6 +196,7 @@ static struct ggml_tensor * depth_rms_norm(struct ggml_context * ctx, struct ggm
 static struct ggml_tensor * depth_layer(struct ggml_context * ctx,
                                         DepthLayer *          l,
                                         struct ggml_tensor *  x,
+                                        struct ggml_tensor *  mask,
                                         int                   S,
                                         int                   B) {
     const int D  = DepthDecoder::HEAD_DIM;
@@ -212,9 +213,7 @@ static struct ggml_tensor * depth_layer(struct ggml_context * ctx,
     v = ggml_permute(ctx, v, 0, 2, 1, 3);
 
     struct ggml_tensor * scores = ggml_mul_mat(ctx, k, q);
-    scores                      = ggml_scale(ctx, scores, 1.0f / sqrtf((float) D));
-    scores                      = ggml_diag_mask_inf(ctx, scores, 0);
-    scores                      = ggml_soft_max(ctx, scores);
+    scores                      = ggml_soft_max_ext(ctx, scores, mask, 1.0f / sqrtf((float) D), 0.0f);
     struct ggml_tensor * vt     = ggml_cont(ctx, ggml_transpose(ctx, v));
     struct ggml_tensor * attn   = ggml_mul_mat(ctx, vt, scores);
     attn                        = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));
@@ -246,8 +245,13 @@ static DepthStep depth_model(struct ggml_context * ctx, DepthDecoder * m, struct
     struct ggml_tensor * pos = ggml_view_2d(ctx, m->pos_embedding, DIM, S, m->pos_embedding->nb[1], 0);
     x                        = ggml_add(ctx, x, pos);
 
+    // Causal mask shared by every layer: -INF where the key comes after the
+    // query, 0 elsewhere, broadcast over heads and batch.
+    struct ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, S, S);
+    mask                      = ggml_tri(ctx, ggml_fill(ctx, mask, -INFINITY), GGML_TRI_TYPE_UPPER);
+
     for (int i = 0; i < DepthDecoder::N_LAYERS; i++) {
-        x = depth_layer(ctx, &m->layers[i], x, S, B);
+        x = depth_layer(ctx, &m->layers[i], x, mask, S, B);
     }
     struct ggml_tensor * hiddens = depth_rms_norm(ctx, x, m->out_norm);
 

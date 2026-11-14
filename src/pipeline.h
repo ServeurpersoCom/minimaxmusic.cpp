@@ -72,11 +72,15 @@ void pipeline_configure(MM3Pipeline * p, const MM3ModelPaths & paths, const MM3P
 // cancel: optional, polled at stage boundaries. NULL disables cancellation.
 // codes_out: optional, the audio_codes stream of each song, identical
 // to the input codes under replay. Feeds request_replay.
+// truncated_out: optional, per song, true when the KV cache shortened its
+// frame budget and the song stopped there before its end of audio token.
+// Always false under replay.
 PipelineStatus pipeline_generate(MM3Pipeline *                     p,
                                  const MM3Request &                req,
                                  std::atomic<bool> *               cancel,
                                  std::vector<std::vector<float>> & tracks_out,
-                                 std::vector<std::string> *        codes_out);
+                                 std::vector<std::string> *        codes_out,
+                                 std::vector<bool> *               truncated_out = nullptr);
 
 // Autoregressive stage only: lm_batch_size code streams out, no
 // synthesis. codes_out[i] is the audio_codes string of song i (8 comma

@@ -53,7 +53,6 @@ struct DiT {
     static const int N_LAYERS   = 36;
     static const int N_HEADS    = 32;
     static const int HEAD_DIM   = 64;
-    static const int FF_INNER   = 8192;
     static const int ROTARY_DIM = 32;
     static const int FOURIER    = 256;
 
@@ -233,13 +232,10 @@ static struct ggml_tensor * dit_block(struct ggml_context * ctx,
     x = ggml_add(ctx, x, sa_out);
 
     // FF: ff_in emits [value(8192), gate(8192)], out = ff_out(value * silu(gate))
-    h                          = dit_layer_norm(ctx, x, b->norm2_w, b->norm2_b);
-    struct ggml_tensor * ff    = ggml_mul_mat(ctx, b->ff_in_w, h);
-    ff                         = ggml_add(ctx, ff, b->ff_in_b);
-    struct ggml_tensor * value = ggml_cont(ctx, ggml_view_3d(ctx, ff, DiT::FF_INNER, S, B, ff->nb[1], ff->nb[2], 0));
-    struct ggml_tensor * gate  = ggml_cont(
-        ctx, ggml_view_3d(ctx, ff, DiT::FF_INNER, S, B, ff->nb[1], ff->nb[2], (size_t) DiT::FF_INNER * ff->nb[0]));
-    struct ggml_tensor * act = ggml_swiglu_split(ctx, gate, value);
+    h                        = dit_layer_norm(ctx, x, b->norm2_w, b->norm2_b);
+    struct ggml_tensor * ff  = ggml_mul_mat(ctx, b->ff_in_w, h);
+    ff                       = ggml_add(ctx, ff, b->ff_in_b);
+    struct ggml_tensor * act = ggml_swiglu_swapped(ctx, ff);
     struct ggml_tensor * out = ggml_mul_mat(ctx, b->ff_out_w, act);
     out                      = ggml_add(ctx, out, b->ff_out_b);
 

@@ -159,8 +159,10 @@ inline bool CondEnc::encode(const std::vector<float> & hidden_states,
         ggml_set_name(graph_input, "cond_input");
         ggml_set_input(graph_input);
 
-        struct ggml_tensor * y   = ggml_conv_1d(ctx, pw, graph_input, 1, 1, 1);
-        y                        = ggml_reshape_2d(ctx, y, y->ne[0], y->ne[1]);
+        struct ggml_tensor * y = ggml_conv_2d_direct(
+            ctx, ggml_reshape_4d(ctx, pw, pw->ne[0], 1, pw->ne[1], pw->ne[2]),
+            ggml_reshape_4d(ctx, graph_input, n_frames, 1, graph_input->ne[1], 1), 1, 1, 1, 0, 1, 1);
+        y                        = ggml_reshape_2d(ctx, y, y->ne[0], y->ne[2]);
         struct ggml_tensor * b2d = ggml_reshape_2d(ctx, pb, 1, 2048);
         graph_output             = ggml_add(ctx, y, b2d);
         if (clamp_fp16) {

@@ -217,7 +217,7 @@ static struct ggml_tensor * depth_layer(struct ggml_context * ctx,
     struct ggml_tensor * vt     = ggml_cont(ctx, ggml_transpose(ctx, v));
     struct ggml_tensor * attn   = ggml_mul_mat(ctx, vt, scores);
     attn                        = ggml_cont(ctx, ggml_permute(ctx, attn, 0, 2, 1, 3));
-    attn                        = ggml_reshape_3d(ctx, attn, Nh * D, S, B);
+    attn                        = ggml_reshape_2d(ctx, attn, Nh * D, (int64_t) S * B);
 
     x = ggml_add(ctx, x, ggml_mul_mat(ctx, l->wo, attn));
 
@@ -250,9 +250,12 @@ static DepthStep depth_model(struct ggml_context * ctx, DepthDecoder * m, struct
     struct ggml_tensor * mask = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, S, S);
     mask                      = ggml_tri(ctx, ggml_fill(ctx, mask, -INFINITY), GGML_TRI_TYPE_UPPER);
 
+    // the layers run on [DIM, S * B]: both CFG rows share the columns of each GEMM
+    x = ggml_reshape_2d(ctx, x, DIM, (int64_t) S * B);
     for (int i = 0; i < DepthDecoder::N_LAYERS; i++) {
         x = depth_layer(ctx, &m->layers[i], x, mask, S, B);
     }
+    x                            = ggml_reshape_3d(ctx, x, DIM, S, B);
     struct ggml_tensor * hiddens = depth_rms_norm(ctx, x, m->out_norm);
 
     struct ggml_tensor * last =

@@ -340,6 +340,12 @@ static PipelineStatus ar_stage(MM3Pipeline *                     p,
     const int V  = lm->cfg.vocab_size;
     const int NC = DepthDecoder::CODEBOOKS - 1;
 
+    if ((int) cond_ids.size() + 1 >= lm->cfg.max_seq_len) {
+        fprintf(stderr, "[AR] FATAL: the prompt takes %zu tokens, the LM KV cache holds %d (--max-seq)\n",
+                cond_ids.size(), lm->cfg.max_seq_len);
+        return PIPELINE_FAILED;
+    }
+
     // Allowed semantic sampling ids: the semantic range plus the end token
     std::vector<int> allowed;
     allowed.reserve(MM3_SEMANTIC_VOCAB + 1);
